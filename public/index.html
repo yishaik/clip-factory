@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Clip Factory — turn one video into 10 viral clips</title>
+<meta name="description" content="Upload one long video. Get 10 short, vertical, captioned clips ready for TikTok, Reels & Shorts. AI finds the best moments." />
+<meta property="og:title" content="Clip Factory — one video → 10 viral clips" />
+<meta property="og:description" content="AI cuts your long video into vertical, captioned shorts ready to post." />
+<style>
+  :root{--bg:#0c0a14;--card:#15121f;--line:#241d33;--ink:#f1ecff;--mut:#a99fc6;--acc:#a855f7;--acc2:#ec4899;--good:#22c55e}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(1200px 600px at 70% -10%,#1c1430,#0c0a14);color:var(--ink)}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 22px}
+  a{color:inherit;text-decoration:none}
+  .nav{display:flex;justify-content:space-between;align-items:center;height:68px}
+  .brand{font-weight:900;font-size:20px}.brand span{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:13px 24px;border-radius:999px;font-weight:800;cursor:pointer;border:0}
+  .btn.primary{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff}
+  .btn.primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
+  .btn.ghost{border:1px solid var(--line);color:var(--ink);background:transparent}
+  header.hero{text-align:center;padding:48px 0 30px}
+  .pill{display:inline-block;border:1px solid var(--line);background:#15122099;color:var(--acc2);padding:5px 14px;border-radius:999px;font-size:13px;font-weight:700}
+  h1{font-size:clamp(36px,7vw,64px);font-weight:900;letter-spacing:-1.5px;line-height:1.02;margin:18px 0 14px}
+  h1 span{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .lead{color:var(--mut);font-size:20px;max-width:620px;margin:0 auto 26px}
+  .cta-row{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .phones{display:flex;gap:18px;justify-content:center;margin:46px 0 10px;flex-wrap:wrap}
+  .phone{width:188px;height:334px;border-radius:24px;border:1px solid var(--line);background:linear-gradient(160deg,#1a1330,#0e0b1a);position:relative;overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45)}
+  .phone .cap{position:absolute;left:10px;right:10px;bottom:34px;text-align:center;font-weight:900;font-size:15px;text-shadow:0 2px 6px #000;background:linear-gradient(transparent,rgba(0,0,0,.25));padding:6px}
+  .phone .tag{position:absolute;top:12px;left:12px;background:#000a;border-radius:6px;font-size:11px;padding:3px 7px;color:#fff}
+  .phone.p2{transform:translateY(-14px)}
+  section{padding:54px 0}
+  h2{font-size:clamp(26px,4vw,38px);font-weight:900;letter-spacing:-.5px;text-align:center;margin-bottom:8px}
+  .sub{color:var(--mut);text-align:center;max-width:560px;margin:0 auto 34px}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+  @media(max-width:720px){.steps{grid-template-columns:1fr}.phone.p2{transform:none}}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px}
+  .step .n{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-weight:900;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;margin-bottom:12px}
+  .step h3{font-size:18px;margin-bottom:6px}.step p{color:var(--mut);font-size:15px}
+  .tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:10px}
+  @media(max-width:720px){.tiers{grid-template-columns:1fr}}
+  .tier{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:24px}
+  .tier.best{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc) inset}
+  .tier .name{font-weight:700;color:var(--mut)}
+  .tier .price{font-size:34px;font-weight:900;margin:6px 0}
+  .tier ul{list-style:none;margin:12px 0 18px}.tier li{color:var(--mut);font-size:14px;padding:5px 0;padding-right:0}
+  .tier li::before{content:"✓ ";color:var(--good);font-weight:900}
+  footer{text-align:center;color:var(--mut);font-size:14px;padding:40px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="nav">
+    <div class="brand">Clip<span>Factory</span></div>
+    <a class="btn primary" id="navcta" href="#pricing">Get clips →</a>
+  </div>
+
+  <header class="hero">
+    <span class="pill">🎬 AI video repurposing</span>
+    <h1>One video.<br><span>Ten viral clips.</span></h1>
+    <p class="lead">Drop in a long video or podcast. AI finds the best moments, reframes them vertical, and burns in captions — clips ready for TikTok, Reels & Shorts in minutes.</p>
+    <div class="cta-row">
+      <a class="btn primary" href="#pricing">Get my clips</a>
+      <a class="btn ghost" href="#how">See how it works</a>
+    </div>
+    <div class="phones">
+      <div class="phone"><div class="tag">0:18</div><div class="cap">The biggest mistake new founders make…</div></div>
+      <div class="phone p2"><div class="tag">0:22</div><div class="cap">Work once. Publish everywhere.</div></div>
+      <div class="phone"><div class="tag">0:20</div><div class="cap">Why most people quit too early…</div></div>
+    </div>
+  </header>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="sub">No editing. No software to learn. You send one video, you get a folder of clips.</p>
+    <div class="steps">
+      <div class="step"><div class="n">1</div><h3>Send your video</h3><p>A talk, podcast, webinar, or interview — anything 5+ minutes with someone talking.</p></div>
+      <div class="step"><div class="n">2</div><h3>AI does the work</h3><p>Whisper transcribes it, AI picks the most clippable moments, reframes to 9:16 and adds captions.</p></div>
+      <div class="step"><div class="n">3</div><h3>Get 10 clips</h3><p>Vertical, captioned, named — ready to post. Download and publish everywhere.</p></div>
+    </div>
+  </section>
+
+  <section id="pricing">
+    <h2>Simple pricing</h2>
+    <p class="sub">Start free. One video can fuel a month of content.</p>
+    <div class="tiers">
+      <div class="tier"><div class="name">Try it</div><div class="price">Free</div>
+        <ul><li>1 video</li><li>3 clips</li><li>Vertical + captions</li></ul>
+        <a class="btn ghost buy" data-tier="free" style="width:100%;justify-content:center" href="#">Get 3 free clips</a></div>
+      <div class="tier best"><div class="name">Per video</div><div class="price">$29</div>
+        <ul><li>1 long video</li><li>Up to 10 clips</li><li>Captions + hooks</li><li>48h delivery</li></ul>
+        <a class="btn primary buy" data-tier="single" style="width:100%;justify-content:center" href="#">Get 10 clips</a></div>
+      <div class="tier"><div class="name">Creator</div><div class="price">$149<span style="font-size:15px;color:var(--mut)">/mo</span></div>
+        <ul><li>8 videos / month</li><li>~80 clips</li><li>Priority delivery</li><li>Cancel anytime</li></ul>
+        <a class="btn ghost buy" data-tier="sub" style="width:100%;justify-content:center" href="#">Start monthly</a></div>
+    </div>
+  </section>
+
+  <footer>Clip Factory · made with ffmpeg + Whisper · clips are yours to keep.</footer>
+</div>
+<script>
+  let PAY = { free:"#", single:"#", sub:"#" };
+  fetch('/api/config').then(r=>r.json()).then(c=>{ PAY = {...PAY, ...c}; document.querySelectorAll('.buy').forEach(b=>{ const u=PAY[b.dataset.tier]; if(u&&u!=="#") b.href=u; }); document.getElementById('navcta').href = (PAY.single&&PAY.single!=="#")?PAY.single:'#pricing'; }).catch(()=>{});
+</script>
+</body>
+</html>

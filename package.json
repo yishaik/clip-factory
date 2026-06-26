@@ -1,0 +1,9 @@
+{
+  "name": "clip-factory",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Turn one long video into many short, vertical, captioned clips ready for TikTok / Reels / Shorts. Local + free (ffmpeg + Whisper).",
+  "bin": { "clip": "clip.mjs" },
+  "scripts": { "clip": "node clip.mjs" },
+  "license": "MIT"
+}

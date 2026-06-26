@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+.vercel/
+*.log
+work/
+clips/
+*.wav
+*.mp4
+*.srt
+_*.png

@@ -1,0 +1,9 @@
+node_modules/
+.env
+work/
+clips/
+*.wav
+*.mp4
+*.srt
+_*.png
+clip.mjs
