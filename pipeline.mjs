@@ -24,10 +24,12 @@ async function tryDownload(url, id) {
   mkdirSync(DL, { recursive: true })
   const out = join(DL, id + '.%(ext)s')
   const args = ['-m', 'yt_dlp',
-    // these player clients return playable URLs without solving YouTube's n-challenge
+    // these player clients return playable URLs without solving YouTube's n-challenge.
+    // prefer 720p DASH (https video-only + m4a audio, merged) over the 360p progressive fallback.
     '--extractor-args', 'youtube:player_client=android_vr,web_safari',
-    '-f', 'best[height<=720][ext=mp4]/18/best[height<=720]/best', '-o', out,
-    '--no-playlist', '--max-filesize', '400M', '--match-filter', `duration < ${MAXMIN * 60}`, url]
+    '-f', 'bv*[height<=720][ext=mp4]+140/bv*[height<=720]+ba/b[height<=720][ext=mp4]/18/best',
+    '--merge-output-format', 'mp4', '-o', out,
+    '--no-playlist', '--max-filesize', '600M', '--match-filter', `duration < ${MAXMIN * 60}`, url]
   if (process.env.PIPE_COOKIES) args.splice(2, 0, '--cookies-from-browser', process.env.PIPE_COOKIES)
   const { e, out: log } = await run('python', args)
   const f = join(DL, id + '.mp4')
