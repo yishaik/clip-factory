@@ -23,9 +23,11 @@ const run = (cmd, args) => new Promise((res) => execFile(cmd, args, { maxBuffer:
 async function tryDownload(url, id) {
   mkdirSync(DL, { recursive: true })
   const out = join(DL, id + '.%(ext)s')
-  const args = ['-m', 'yt_dlp', '-f', 'mp4[height<=720]/best[height<=720]/best', '-o', out,
-    '--no-playlist', '--max-filesize', '300M', '--match-filter', `duration < ${MAXMIN * 60}`, url]
-  // try with browser cookies if available (helps bypass bot checks)
+  const args = ['-m', 'yt_dlp',
+    // these player clients return playable URLs without solving YouTube's n-challenge
+    '--extractor-args', 'youtube:player_client=android_vr,web_safari',
+    '-f', 'best[height<=720][ext=mp4]/18/best[height<=720]/best', '-o', out,
+    '--no-playlist', '--max-filesize', '400M', '--match-filter', `duration < ${MAXMIN * 60}`, url]
   if (process.env.PIPE_COOKIES) args.splice(2, 0, '--cookies-from-browser', process.env.PIPE_COOKIES)
   const { e, out: log } = await run('python', args)
   const f = join(DL, id + '.mp4')
