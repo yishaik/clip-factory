@@ -52,8 +52,8 @@ function scoreTitle(t) {
   return s
 }
 
-export async function discover(sources, { days = DAYS } = {}) {
-  const seen = new Set(existsSync(SEENF) ? JSON.parse(readFileSync(SEENF, 'utf8')) : [])
+export async function discover(sources, { days = DAYS, skipSeen = false } = {}) {
+  const seen = skipSeen ? new Set() : new Set(existsSync(SEENF) ? JSON.parse(readFileSync(SEENF, 'utf8')) : [])
   const cutoff = Date.now() - days * 864e5
   const found = []
   for (const src of sources) {
