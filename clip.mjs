@@ -170,9 +170,12 @@ async function renderClip(input, win, idx, outDir, workDir, words) {
   writeFileSync(assPath, buildAss(words || [], win, win.hook, process.env.CLIP_BRAND || ''))
   const assArg = basename(assPath) // ffmpeg cwd=workDir so the path is simple (libass-safe)
   const out = join(outDir, `clip-${idx}.mp4`)
-  const vf = `[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];` +
-    `[fg]scale=1040:-2:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2[bv];` +
-    `[bv]ass=${assArg}[v]`
+  // framing: 'fill' = full-bleed zoom on the centre (viral default), 'blur' = fit with blurred bg
+  const frame = process.env.CLIP_FRAME || 'fill'
+  const vf = frame === 'blur'
+    ? `[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];` +
+      `[fg]scale=1040:-2:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2[bv];[bv]ass=${assArg}[v]`
+    : `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bv];[bv]ass=${assArg}[v]`
   await run('ffmpeg', ['-y', '-ss', String(win.start), '-t', String(dur), '-i', resolve(input),
     '-filter_complex', vf, '-map', '[v]', '-map', '0:a', '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', resolve(out)], { cwd: workDir })
   return out
