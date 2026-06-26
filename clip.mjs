@@ -177,18 +177,32 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 ${events}`
 }
 
+// where to horizontally crop for vertical framing — follow the speaker's face (0..1), else centre
+async function faceX(input, win) {
+  if (process.env.CLIP_FRAME === 'fill' || process.env.CLIP_FRAME === 'blur') return 0.5
+  try {
+    const out = await run('python', [join(ROOT, 'face_track.py'), resolve(input), String(win.start), String(win.end - win.start)])
+    const m = out.match(/\{[^{}]*"x"[^{}]*\}/)
+    if (m) { const j = JSON.parse(m[0]); if (j && j.conf >= 4 && typeof j.x === 'number') return j.x }
+  } catch {}
+  return 0.5
+}
+
 async function renderClip(input, win, idx, outDir, workDir, words) {
   const dur = win.end - win.start
   const assPath = join(workDir, `clip-${idx}.ass`)
   writeFileSync(assPath, buildAss(words || [], win, win.hook, process.env.CLIP_BRAND || ''))
   const assArg = basename(assPath) // ffmpeg cwd=workDir so the path is simple (libass-safe)
   const out = join(outDir, `clip-${idx}.mp4`)
-  // framing: 'fill' = full-bleed zoom on the centre (viral default), 'blur' = fit with blurred bg
-  const frame = process.env.CLIP_FRAME || 'fill'
+  // framing: 'smart' (default) crops around the speaker's face; 'fill' = centre zoom; 'blur' = fit + blurred bg
+  const frame = process.env.CLIP_FRAME || 'smart'
+  const X = frame === 'smart' ? await faceX(input, win) : 0.5
   const vf = frame === 'blur'
     ? `[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];` +
       `[fg]scale=1040:-2:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2[bv];[bv]ass=${assArg}[v]`
-    : `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bv];[bv]ass=${assArg}[v]`
+    : frame === 'fill'
+      ? `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bv];[bv]ass=${assArg}[v]`
+      : `[0:v]scale=-2:1920[sc];[sc]crop=1080:1920:min(max(${X.toFixed(3)}*iw-540\\,0)\\,iw-1080):0[bv];[bv]ass=${assArg}[v]`
   await run('ffmpeg', ['-y', '-ss', String(win.start), '-t', String(dur), '-i', resolve(input),
     '-filter_complex', vf, '-map', '[v]', '-map', '0:a', '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', resolve(out)], { cwd: workDir })
   return out
