@@ -15,7 +15,8 @@ const ROOT = dirname(fileURLToPath(import.meta.url))
 const DL = join(ROOT, 'downloads')
 const N = Number(process.env.PIPE_VIDEOS || 3)       // how many source videos to process
 const PER = Number(process.env.PIPE_CLIPS || 5)      // clips per video
-const MAXMIN = Number(process.env.PIPE_MAXMIN || 40) // skip videos longer than this
+const MAXMIN = Number(process.env.PIPE_MAXMIN || 60) // skip videos longer than this
+const HEAD = Number(process.env.PIPE_HEAD || 15)     // only clip the first N minutes (0 = whole video) — bounds CPU transcription
 
 const run = (cmd, args) => new Promise((res) => execFile(cmd, args, { maxBuffer: 1 << 26 }, (e, so, se) => res({ e, out: (so || '') + (se || '') })))
 
@@ -38,6 +39,17 @@ async function tryDownload(url, id) {
   return null
 }
 
+// trim to the first HEAD minutes (bounds transcription time) if the video is longer
+async function trimHead(file) {
+  if (!HEAD) return file
+  const { out } = await run('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file])
+  const dur = parseFloat(out)
+  if (!(dur > HEAD * 60 + 5)) return file
+  const trimmed = file.replace(/\.mp4$/, '.head.mp4')
+  await run('ffmpeg', ['-y', '-i', file, '-t', String(HEAD * 60), '-c', 'copy', trimmed])
+  return existsSync(trimmed) ? trimmed : file
+}
+
 const sources = (() => { const f = join(ROOT, 'sources.json'); return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : [] })()
 if (!sources.length) { console.error('no sources.json'); process.exit(1) }
 
@@ -54,8 +66,9 @@ for (const v of top) {
   if (!file) { v.status = 'download-blocked'; continue }
   console.error(`[3/3] clipping...`)
   try {
-    const { outDir, clips } = await makeClips(file, { n: PER })
-    v.status = 'done'; v.clips = clips.length; v.outDir = outDir
+    const clipFile = await trimHead(file)
+    const { outDir, clips } = await makeClips(clipFile, { n: PER })
+    v.status = 'done'; v.clips = clips; v.outDir = outDir
     done.push(v)
     console.error(`  -> ${clips.length} clips in ${outDir}`)
   } catch (e) { v.status = 'clip-error: ' + e.message }
@@ -63,5 +76,9 @@ for (const v of top) {
 markSeen(top.map((v) => v.id))
 
 console.log(`\n=== pipeline done: ${done.length}/${top.length} videos clipped ===`)
-for (const v of top) console.log(`  [${v.status || '?'}] ${v.title}${v.clips ? ` (${v.clips} clips)` : ''}`)
-if (!done.length) console.log('\nNote: YouTube download is anti-bot-blocked here. Discovery + queue.json work; drop a video file and run `node clip.mjs <file>`, or set PIPE_COOKIES=firefox if logged in there.')
+for (const v of done) {
+  console.log(`\n📹 ${v.title} — ${v.channel}\n   ${v.url}`)
+  for (const c of v.clips) console.log(`   ${c.file}  (viral ${c.viralScore ?? '?'}, ${c.dur}s) "${c.hook || ''}"`)
+}
+for (const v of top.filter((v) => v.status !== 'done')) console.log(`   [${v.status}] ${v.title}`)
+if (!done.length) console.log('\nNote: nothing produced (downloads blocked or no candidates). Discovery + queue.json still work.')
