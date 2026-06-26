@@ -83,18 +83,35 @@ function scoreWindow(w) {
   return s
 }
 
-async function gemmaTitle(text) {
+async function gemma(prompt, { json = false, ms = 180000 } = {}) {
   try {
-    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 60000)
-    const opts = { temperature: 0.7 }; if (!process.env.CLIP_GPU) opts.num_gpu = 0
-    const r = await fetch(`${HOST}/api/generate`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL, prompt: `Write a punchy 4-8 word social caption/hook for this short clip. No quotes, no hashtags.\n\n"${text.slice(0, 400)}"`, stream: false, options: opts }),
-      signal: ctrl.signal,
-    }).finally(() => clearTimeout(t))
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
+    const opts = { temperature: 0.6 }; if (!process.env.CLIP_GPU) opts.num_gpu = 0 // CPU by default (small GPU is full)
+    const body = { model: MODEL, prompt, stream: false, options: opts }; if (json) body.format = 'json'
+    const r = await fetch(`${HOST}/api/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: ctrl.signal }).finally(() => clearTimeout(t))
     if (!r.ok) return null
-    return ((await r.json()).response || '').trim().split('\n')[0].replace(/^["']|["']$/g, '').slice(0, 80) || null
+    return ((await r.json()).response || '').trim()
   } catch { return null }
+}
+
+// LLM decision engine: score each candidate window for short-form viral potential, in ONE call.
+async function rankWindowsLLM(windows) {
+  const cands = windows.slice(0, 10) // heuristic pre-filter -> LLM precision-ranks these
+  const list = cands.map((w, i) => `[${i}] (${Math.round(w.end - w.start)}s) ${w.text.slice(0, 200)}`).join('\n\n')
+  const prompt = `You are a world-class short-form video editor (TikTok/Reels/YouTube Shorts). Below are numbered transcript segments from one long video. Score each 0-100 for viral potential as a STANDALONE short clip.\n` +
+    `Reward: a strong hook in the first sentence, an emotional/surprising/contrarian payoff, a quotable line, clarity without outside context.\n` +
+    `Penalize: rambling, starting mid-thought, filler, or needing context to make sense.\n` +
+    `Return ONLY a JSON object {"clips":[{"i":<index>,"score":<0-100>,"hook":"<punchy 4-8 word caption, no hashtags>"}]} with one entry per segment. Keep it compact.\n\nSEGMENTS:\n${list}`
+  const raw = await gemma(prompt, { json: true, ms: 300000 })
+  if (!raw) return null
+  let arr
+  try { const j = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw); arr = j.clips || j.segments || (Array.isArray(j) ? j : null) } catch { return null }
+  if (!Array.isArray(arr) || !arr.length) return null
+  const byI = new Map(arr.map((x) => [Number(x.i), x]))
+  let hit = 0
+  cands.forEach((w, i) => { const r = byI.get(i); if (r && r.score != null) { w.llmScore = Number(r.score) || 0; w.hook = (r.hook || '').toString().slice(0, 80); w.reason = (r.reason || '').toString().slice(0, 120); hit++ } })
+  if (!hit) return null
+  return cands.filter((w) => w.llmScore != null).sort((a, b) => b.llmScore - a.llmScore)
 }
 
 function writeClipSrt(cues, winStart, path) {
@@ -129,20 +146,30 @@ export async function makeClips(input, { n = 3, outDir, ai = false } = {}) {
   console.error('transcribing (whisper ' + WMODEL + ')...')
   const cues = await transcribe(input, workDir)
   if (!cues.length) throw new Error('no speech transcribed')
-  const windows = buildWindows(cues).map((w) => ({ ...w, score: scoreWindow(w) })).sort((a, b) => b.score - a.score)
+  let windows = buildWindows(cues).map((w) => ({ ...w, score: scoreWindow(w) })).sort((a, b) => b.score - a.score)
+
+  // decision engine: LLM virality ranking (default), heuristic fallback
+  let how = 'heuristic'
+  if (process.env.CLIP_NO_LLM !== '1') {
+    console.error('decision engine: scoring segments for virality (LLM)...')
+    const llm = await rankWindowsLLM(windows).catch(() => null)
+    if (llm && llm.length) { windows = llm; how = 'LLM virality' }
+  }
   const chosen = windows.slice(0, n)
-  console.error(`transcribed ${cues.length} cues -> ${windows.length} windows -> top ${chosen.length}`)
+  console.error(`transcribed ${cues.length} cues -> ${windows.length} candidate windows -> top ${chosen.length} (${how})`)
 
   const results = []
   for (let i = 0; i < chosen.length; i++) {
     const w = chosen[i]
-    console.error(`  clip ${i + 1}: ${w.start.toFixed(1)}-${w.end.toFixed(1)}s (score ${w.score})`)
+    const sc = w.llmScore != null ? `viral ${w.llmScore}` : `score ${w.score}`
+    console.error(`  clip ${i + 1}: ${w.start.toFixed(1)}-${w.end.toFixed(1)}s (${sc})${w.hook ? ' — “' + w.hook + '”' : ''}`)
     const file = await renderClip(input, w, i + 1, outDir, workDir)
-    const title = ai ? await gemmaTitle(w.text) : null
-    results.push({ idx: i + 1, file, start: w.start, end: w.end, dur: +(w.end - w.start).toFixed(1), score: w.score, title, text: w.text })
+    let title = w.hook || null
+    if (!title && ai) title = await gemma(`Write a punchy 4-8 word social caption for this clip, no quotes/hashtags:\n"${w.text.slice(0, 400)}"`)
+    results.push({ idx: i + 1, file, start: w.start, end: w.end, dur: +(w.end - w.start).toFixed(1), viralScore: w.llmScore ?? null, hook: w.hook || null, reason: w.reason || null, heuristic: w.score, title, text: w.text })
   }
   writeFileSync(join(outDir, 'clips.json'), JSON.stringify(results, null, 2))
-  try { rmSync(workDir, { recursive: true, force: true }) } catch {}
+  if (process.env.CLIP_KEEP !== '1') { try { rmSync(workDir, { recursive: true, force: true }) } catch {} }
   return { outDir, clips: results }
 }
 
