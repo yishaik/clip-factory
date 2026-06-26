@@ -44,11 +44,15 @@ function parseSrt(text) {
 }
 
 async function transcribe(file, workDir) {
-  const srt = join(workDir, basename(file, extname(file)) + '.srt')
-  if (!existsSync(srt)) {
-    await run('whisper', [file, '--model', WMODEL, '--output_format', 'srt', '--output_dir', workDir], { cwd: workDir })
+  const jsonp = join(workDir, basename(file, extname(file)) + '.json')
+  if (!existsSync(jsonp)) {
+    await run('whisper', [file, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir], { cwd: workDir })
   }
-  return parseSrt(readFileSync(srt, 'utf8'))
+  const j = JSON.parse(readFileSync(jsonp, 'utf8'))
+  const cues = (j.segments || []).map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((c) => c.text)
+  const words = []
+  for (const s of (j.segments || [])) for (const w of (s.words || [])) { const t = (w.word || '').trim(); if (t && w.end > w.start) words.push({ start: w.start, end: w.end, text: t }) }
+  return { cues, words }
 }
 
 // group consecutive cues into windows of MIN..MAX seconds, breaking on long gaps
@@ -114,23 +118,61 @@ async function rankWindowsLLM(windows) {
   return cands.filter((w) => w.llmScore != null).sort((a, b) => b.llmScore - a.llmScore)
 }
 
-function writeClipSrt(cues, winStart, path) {
-  let out = ''
-  cues.forEach((c, i) => {
-    out += `${i + 1}\n${T(Math.max(0, c.start - winStart))} --> ${T(Math.max(0.2, c.end - winStart))}\n${c.text}\n\n`
-  })
-  writeFileSync(path, out)
+const aT = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = (s % 60); return `${h}:${String(m).padStart(2, '0')}:${sec.toFixed(2).padStart(5, '0')}` }
+const assEsc = (t) => String(t).replace(/[{}\\]/g, '').replace(/\n/g, ' ')
+
+// build a styled ASS: word-by-word karaoke captions (lower third) + a hook title card (top, first 3s) + optional brand
+function buildAss(words, win, hook, brand) {
+  const dur = win.end - win.start
+  const W = words.filter((w) => w.end > win.start && w.start < win.end)
+    .map((w) => ({ start: Math.max(0, w.start - win.start), end: Math.min(dur, Math.max(0.1, w.end - win.start)), text: assEsc(w.text) }))
+  // group words into short karaoke lines
+  const lines = []; let cur = []
+  for (const w of W) {
+    cur.push(w)
+    const lineDur = w.end - cur[0].start
+    if (cur.length >= 4 || lineDur >= 1.6 || /[.!?]$/.test(w.text)) { lines.push(cur); cur = [] }
+  }
+  if (cur.length) lines.push(cur)
+
+  let events = ''
+  for (const ln of lines) {
+    const start = ln[0].start, end = ln[ln.length - 1].end
+    let text = ''
+    ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; const cs = Math.max(1, Math.round((next - w.start) * 100)); text += `{\\kf${cs}}${w.text} ` })
+    events += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${text.trim()}\n`
+  }
+  if (hook) events = `Dialogue: 0,0:00:00.00,${aT(Math.min(3, dur))},Hook,,0,0,0,,${assEsc(hook)}\n` + events
+  if (brand) events += `Dialogue: 0,0:00:00.00,${aT(dur)},Brand,,0,0,0,,${assEsc(brand)}\n`
+
+  // colours are &HAABBGGRR. sung=yellow, unsung=white, dark outline.
+  return `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+WrapStyle: 2
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Cap,Arial,76,&H0000FFFF,&H00FFFFFF,&H00101010,&H00000000,1,0,0,0,100,100,0,0,1,5,2,2,90,90,300,1
+Style: Hook,Arial,56,&H00FFFFFF,&H00FFFFFF,&H00101010,&HB0000000,1,0,0,0,100,100,0,0,3,4,0,8,80,80,150,1
+Style: Brand,Arial,40,&H00D9C6A8,&H00D9C6A8,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,2,1,2,40,40,90,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+${events}`
 }
 
-async function renderClip(input, win, idx, outDir, workDir) {
+async function renderClip(input, win, idx, outDir, workDir, words) {
   const dur = win.end - win.start
-  const srtPath = join(workDir, `clip-${idx}.srt`)
-  writeClipSrt(win.cues, win.start, srtPath)
-  const srtArg = basename(srtPath) // run ffmpeg with cwd=workDir so the path is simple (libass-safe)
+  const assPath = join(workDir, `clip-${idx}.ass`)
+  writeFileSync(assPath, buildAss(words || [], win, win.hook, process.env.CLIP_BRAND || ''))
+  const assArg = basename(assPath) // ffmpeg cwd=workDir so the path is simple (libass-safe)
   const out = join(outDir, `clip-${idx}.mp4`)
   const vf = `[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];` +
     `[fg]scale=1040:-2:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2[bv];` +
-    `[bv]subtitles=${srtArg}:force_style='Fontname=Arial,FontSize=16,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00101010,BorderStyle=1,Outline=4,Shadow=1,Alignment=2,MarginV=60'[v]`
+    `[bv]ass=${assArg}[v]`
   await run('ffmpeg', ['-y', '-ss', String(win.start), '-t', String(dur), '-i', resolve(input),
     '-filter_complex', vf, '-map', '[v]', '-map', '0:a', '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', resolve(out)], { cwd: workDir })
   return out
@@ -143,8 +185,8 @@ export async function makeClips(input, { n = 3, outDir, ai = false } = {}) {
   const workDir = join(outDir, '_work')
   mkdirSync(outDir, { recursive: true }); mkdirSync(workDir, { recursive: true })
 
-  console.error('transcribing (whisper ' + WMODEL + ')...')
-  const cues = await transcribe(input, workDir)
+  console.error('transcribing (whisper ' + WMODEL + ', word timestamps)...')
+  const { cues, words } = await transcribe(input, workDir)
   if (!cues.length) throw new Error('no speech transcribed')
   let windows = buildWindows(cues).map((w) => ({ ...w, score: scoreWindow(w) })).sort((a, b) => b.score - a.score)
 
@@ -163,7 +205,7 @@ export async function makeClips(input, { n = 3, outDir, ai = false } = {}) {
     const w = chosen[i]
     const sc = w.llmScore != null ? `viral ${w.llmScore}` : `score ${w.score}`
     console.error(`  clip ${i + 1}: ${w.start.toFixed(1)}-${w.end.toFixed(1)}s (${sc})${w.hook ? ' — “' + w.hook + '”' : ''}`)
-    const file = await renderClip(input, w, i + 1, outDir, workDir)
+    const file = await renderClip(input, w, i + 1, outDir, workDir, words)
     let title = w.hook || null
     if (!title && ai) title = await gemma(`Write a punchy 4-8 word social caption for this clip, no quotes/hashtags:\n"${w.text.slice(0, 400)}"`)
     results.push({ idx: i + 1, file, start: w.start, end: w.end, dur: +(w.end - w.start).toFixed(1), viralScore: w.llmScore ?? null, hook: w.hook || null, reason: w.reason || null, heuristic: w.score, title, text: w.text })
