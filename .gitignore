@@ -5,7 +5,13 @@ node_modules/
 *.log
 work/
 clips/
+downloads/
+queue.json
+.source-seen.json
 *.wav
 *.mp4
 *.srt
+*.json.tmp
 _*.png
+
+.vercel
