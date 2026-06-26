@@ -56,23 +56,36 @@ async function transcribe(file, workDir) {
 }
 
 // group consecutive cues into windows of MIN..MAX seconds, breaking on long gaps
-function buildWindows(cues, min = 10, max = 45) {
-  const GAP = Number(process.env.CLIP_GAP || 1.2)      // a pause this long starts a new clip
-  const TARGET = Number(process.env.CLIP_TARGET || 24) // aim for ~this many seconds per clip
+// Sentence-aware windows: each clip STARTS at a thought-start (after a pause or a sentence end)
+// and ENDS at a sentence end, so it stands on its own and leads with its hook.
+function buildWindows(cues) {
+  const GAP = Number(process.env.CLIP_GAP || 0.8)
+  const MIN = Number(process.env.CLIP_MIN || 14)
+  const TARGET = Number(process.env.CLIP_TARGET || 26)
+  const MAX = Number(process.env.CLIP_MAX || 44)
+  const endsSentence = (t) => /[.!?]["')\]]?$/.test((t || '').trim())
+  const isStart = (i) => i === 0 || endsSentence(cues[i - 1].text) || (cues[i].start - cues[i - 1].end > GAP)
+  const isEnd = (i) => i === cues.length - 1 || endsSentence(cues[i].text) || (cues[i + 1].start - cues[i].end > GAP)
+
   const wins = []
-  let cur = []
-  for (const c of cues) {
-    if (!cur.length) { cur = [c]; continue }
-    const start = cur[0].start
-    const prevEnd = cur[cur.length - 1].end
-    const dur = prevEnd - start
-    if (c.start - prevEnd > GAP || c.end - start > max || (dur >= TARGET && dur >= min)) { wins.push(cur); cur = [c]; continue }
-    cur.push(c)
+  for (let i = 0; i < cues.length; i++) {
+    if (!isStart(i)) continue
+    const start = cues[i].start
+    let j = i
+    while (j + 1 < cues.length) {
+      const durNow = cues[j].end - start
+      if (durNow >= TARGET && isEnd(j)) break          // hit target at a clean sentence end
+      if (cues[j + 1].end - start > MAX) break          // adding the next cue would exceed max
+      j++
+    }
+    // if we stopped mid-sentence (max reached), back off to the last clean end >= MIN
+    if (!isEnd(j)) { let k = j; while (k > i && !(isEnd(k) && cues[k].end - start >= MIN)) k--; if (k > i) j = k }
+    const end = cues[j].end
+    if (end - start < MIN) continue
+    wins.push({ start, end, cues: cues.slice(i, j + 1), text: cues.slice(i, j + 1).map((x) => x.text).join(' ') })
+    i = j // non-overlapping: continue after this window
   }
-  if (cur.length) wins.push(cur)
   return wins
-    .map((cs) => ({ start: cs[0].start, end: cs[cs.length - 1].end, cues: cs, text: cs.map((x) => x.text).join(' ') }))
-    .filter((w) => w.end - w.start >= min * 0.6)
 }
 
 // hook score: punchy openers + numbers + curiosity words
