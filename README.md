@@ -1,6 +1,6 @@
 # Clip Factory
 
-**Live:** https://clip-factory.vercel.app
+**Live:** https://clip-factory-sooty.vercel.app
 
 **Turn one long video into many short, vertical, captioned clips — ready for TikTok / Reels / Shorts.** Local + free engine (ffmpeg + Whisper), built in an AI-hustle Speedrun.
 
