@@ -128,13 +128,14 @@ async function ollama(prompt, { json = false, ms = 180000 } = {}) {
 }
 
 // Gemini cloud (model configurable: flash for cheap fallback, 2.5-pro for the decision engine)
-async function geminiCloud(prompt, { json = false, model, ms = 90000 } = {}) {
+async function geminiCloud(prompt, { json = false, model, ms = 90000, think } = {}) {
   const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
   if (!key) return null
   try {
     const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
     const m = model || process.env.CLIP_CLOUD_MODEL || 'gemini-flash-latest'
-    const gc = { temperature: 0.6, maxOutputTokens: 4096 }; if (json) gc.responseMimeType = 'application/json'
+    const gc = { temperature: 0.6, maxOutputTokens: 8192 }; if (json) gc.responseMimeType = 'application/json'
+    if (think != null) gc.thinkingConfig = { thinkingBudget: think } // 0 = no "thinking" tokens (reliable structured JSON)
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: gc }), signal: ctrl.signal,
@@ -167,9 +168,9 @@ async function claudeCloud(prompt, { json = false, ms = 90000 } = {}) {
 // drop to heuristic just because the slow preview model timed out).
 async function decide(prompt, opts = {}) {
   if (process.env.ANTHROPIC_API_KEY) { const c = await claudeCloud(prompt, opts); if (c) return c }
-  const pro = await geminiCloud(prompt, { ...opts, model: process.env.CLIP_DECISION_MODEL || 'gemini-3.1-pro-preview', ms: 150000 })
+  const pro = await geminiCloud(prompt, { ...opts, model: process.env.CLIP_DECISION_MODEL || 'gemini-3.1-pro-preview', ms: 150000, think: 0 })
   if (pro) return pro
-  const fast = await geminiCloud(prompt, { ...opts, model: 'gemini-flash-latest', ms: 40000 })
+  const fast = await geminiCloud(prompt, { ...opts, model: 'gemini-flash-latest', ms: 40000, think: 0 })
   if (fast) return fast
   return await ollama(prompt, opts)
 }
