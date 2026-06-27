@@ -127,15 +127,15 @@ async function ollama(prompt, { json = false, ms = 180000 } = {}) {
   } catch { return null }
 }
 
-// cloud fallback (Gemini Flash) — used when local Gemma is down/OOM, so hooks + ranking stay reliable
-async function geminiCloud(prompt, { json = false } = {}) {
+// Gemini cloud (model configurable: flash for cheap fallback, 2.5-pro for the decision engine)
+async function geminiCloud(prompt, { json = false, model, ms = 90000 } = {}) {
   const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
   if (!key) return null
   try {
-    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 60000)
-    const model = process.env.CLIP_CLOUD_MODEL || 'gemini-flash-latest'
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
+    const m = model || process.env.CLIP_CLOUD_MODEL || 'gemini-flash-latest'
     const gc = { temperature: 0.6 }; if (json) gc.responseMimeType = 'application/json'
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: gc }), signal: ctrl.signal,
     }).finally(() => clearTimeout(t))
@@ -145,7 +145,33 @@ async function geminiCloud(prompt, { json = false } = {}) {
   } catch { return null }
 }
 
-// try local first (free), fall back to cloud (reliable)
+// Claude cloud (Anthropic Messages API) — best taste/judgment; active only when ANTHROPIC_API_KEY is set
+async function claudeCloud(prompt, { json = false, ms = 90000 } = {}) {
+  const key = process.env.ANTHROPIC_API_KEY
+  if (!key) return null
+  try {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
+    const model = process.env.CLIP_CLAUDE_MODEL || 'claude-opus-4-8'
+    const sys = json ? 'Respond with valid JSON only — no prose, no markdown fences.' : undefined
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model, max_tokens: 2048, temperature: 0.6, system: sys, messages: [{ role: 'user', content: prompt }] }), signal: ctrl.signal,
+    }).finally(() => clearTimeout(t))
+    if (!r.ok) return null
+    const j = await r.json()
+    return ((j.content && j.content[0]?.text) || '').trim() || null
+  } catch { return null }
+}
+
+// DECISION engine model — strongest available: Claude (if key) → Gemini 2.5 Pro → local Gemma
+async function decide(prompt, opts = {}) {
+  if (process.env.ANTHROPIC_API_KEY) { const c = await claudeCloud(prompt, opts); if (c) return c }
+  const g = await geminiCloud(prompt, { ...opts, model: process.env.CLIP_DECISION_MODEL || 'gemini-3.1-pro-preview' })
+  if (g) return g
+  return await ollama(prompt, opts)
+}
+
+// general helper (hooks/titles etc.): local first (free) → cloud
 async function gemma(prompt, opts = {}) {
   if (process.env.CLIP_NO_LOCAL !== '1') {
     const local = await ollama(prompt, opts)
@@ -162,7 +188,7 @@ async function rankWindowsLLM(windows) {
     `Reward: a strong hook in the first sentence, an emotional/surprising/contrarian payoff, a quotable line, clarity without outside context.\n` +
     `Penalize: rambling, starting mid-thought, filler, or needing context to make sense.\n` +
     `Return ONLY a JSON object {"clips":[{"i":<index>,"score":<0-100>,"hook":"<punchy 4-8 word caption, no hashtags>"}]} with one entry per segment. Keep it compact.\n\nSEGMENTS:\n${list}`
-  const raw = await gemma(prompt, { json: true, ms: 300000 })
+  const raw = await decide(prompt, { json: true, ms: 90000 })
   if (!raw) return null
   let arr
   try { const j = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw); arr = j.clips || j.segments || (Array.isArray(j) ? j : null) } catch { return null }
