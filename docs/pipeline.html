@@ -1,0 +1,74 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  body{margin:0;background:#0c0a14;font-family:system-ui,Segoe UI,sans-serif}
+  .wrap{padding:28px 34px}
+  h1{color:#f1ecff;font-size:30px;margin:0 0 2px}
+  h1 b{background:linear-gradient(90deg,#a855f7,#ec4899);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .sub{color:#a99fc6;font-size:15px;margin:0 0 18px}
+  .mermaid{background:#0c0a14}
+</style></head>
+<body>
+<div class="wrap">
+  <h1>Clip<b>Factory</b> — Pipeline</h1>
+  <p class="sub">one long video → many short, vertical, captioned clips · ffmpeg + Whisper + LLM + face-aware framing</p>
+<pre class="mermaid">
+flowchart TD
+  sched["⏰ daily 09:30 (scheduled)\nor: node pipeline.mjs"]:::sch --> A
+
+  subgraph S1["1 · SOURCE  (source.mjs)"]
+    direction TB
+    A["sources.json\nYouTube channels (@handle / UC-id)"]:::io --> B["resolveChannelId\n@handle → channel UC-id"]
+    B --> C["channelFeed\nfree RSS: youtube.com/feeds/videos.xml\n(no API key, not bot-blocked)"]
+    C --> D["filter unseen (.source-seen.json) + recent\nscoreTitle by hook words / numbers / '?'"]
+    D --> E[("queue.json\nranked candidates")]:::io
+  end
+
+  E --> LOOP{"for each candidate\nuntil N clipped"}
+
+  subgraph S2["2 · DOWNLOAD  (pipeline.mjs)"]
+    direction TB
+    LOOP --> G["yt-dlp · player_client=android_vr,web_safari\n720p DASH (video+audio merge)\nbypasses YouTube n-challenge"]
+    G -. "403 / blocked" .-> LOOP
+    G --> H["trimHead → first 8 min\n(bounds Whisper memory)"]
+  end
+
+  subgraph S3["3 · CLIP ENGINE  (clip.mjs · makeClips)"]
+    direction TB
+    H --> I["transcribe · Whisper (base, word timestamps)\n→ cues (segments) + words (per-word times)"]
+    I --> J["buildWindows · sentence-aware\nstart @ thought-start · end @ sentence-end · 14–44s"]
+    J --> K["scoreWindow (heuristic) → prefilter top 10"]
+    K --> L["rankWindowsLLM  ★ DECISION ENGINE\nscore virality 0–100 + write a hook"]
+    L --> L1{"local Gemma\n(Ollama, CPU, free)"}
+    L1 -- "ok" --> M
+    L1 -- "OOM / down" --> L2["☁ Gemini cloud\n(gemini-flash-latest)"]:::cloud
+    L2 --> M["rank by viral score → pick top N"]
+  end
+
+  subgraph S4["4 · RENDER  (renderClip · per clip)"]
+    direction TB
+    M --> N["buildAss\nword-by-word karaoke captions (yellow fill)\n+ hook title card (first 3s)"]
+    M --> O["faceInfo · OpenCV (face_track.py)\nsample frames → frac, face x"]
+    O --> P{"face in ≥15%\nof frames?"}
+    P -- "yes" --> Q["crop around speaker\n(x = face centre)"]
+    P -- "no (B-roll)" --> R["blur-fit\nwhole frame + blurred bg"]
+    N --> FF
+    Q --> FF["ffmpeg · cut [start,end]\n→ 1080×1920 → burn captions\nlibx264 / aac"]
+    R --> FF
+    FF --> T["clip-N.mp4  +  clips.json\n(viral score · hook · dur)"]:::io
+  end
+
+  T --> Z["markSeen → deliver clips\n(Telegram / folder)"]:::done
+
+  classDef sch fill:#1a1330,stroke:#a855f7,color:#f1ecff;
+  classDef io fill:#15122a,stroke:#6b5bd6,color:#eadcff;
+  classDef cloud fill:#10243a,stroke:#4f9cff,color:#dff0ff;
+  classDef done fill:#10241a,stroke:#22c55e,color:#dffce9;
+</pre>
+</div>
+<script>
+  mermaid.initialize({startOnLoad:true, theme:'dark', flowchart:{nodeSpacing:38, rankSpacing:42, curve:'basis'},
+    themeVariables:{fontSize:'15px', primaryColor:'#1c1630', primaryBorderColor:'#7b5bd6', primaryTextColor:'#efe8ff', lineColor:'#7d6fb0', clusterBkg:'#120e22', clusterBorder:'#2c2348'}});
+</script>
+</body></html>
