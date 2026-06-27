@@ -163,11 +163,14 @@ async function claudeCloud(prompt, { json = false, ms = 90000 } = {}) {
   } catch { return null }
 }
 
-// DECISION engine model — strongest available: Claude (if key) → Gemini 2.5 Pro → local Gemma
+// DECISION engine — strongest first, then a fast reliable cloud model, then local (so hooks never silently
+// drop to heuristic just because the slow preview model timed out).
 async function decide(prompt, opts = {}) {
   if (process.env.ANTHROPIC_API_KEY) { const c = await claudeCloud(prompt, opts); if (c) return c }
-  const g = await geminiCloud(prompt, { ...opts, model: process.env.CLIP_DECISION_MODEL || 'gemini-3.1-pro-preview' })
-  if (g) return g
+  const pro = await geminiCloud(prompt, { ...opts, model: process.env.CLIP_DECISION_MODEL || 'gemini-3.1-pro-preview', ms: 150000 })
+  if (pro) return pro
+  const fast = await geminiCloud(prompt, { ...opts, model: 'gemini-flash-latest', ms: 40000 })
+  if (fast) return fast
   return await ollama(prompt, opts)
 }
 
