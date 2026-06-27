@@ -16,7 +16,7 @@ const DL = join(ROOT, 'downloads')
 const N = Number(process.env.PIPE_VIDEOS || 3)       // how many source videos to process
 const PER = Number(process.env.PIPE_CLIPS || 5)      // clips per video
 const MAXMIN = Number(process.env.PIPE_MAXMIN || 60) // skip videos longer than this
-const HEAD = Number(process.env.PIPE_HEAD || 15)     // only clip the first N minutes (0 = whole video) — bounds CPU transcription
+const HEAD = Number(process.env.PIPE_HEAD || 8)      // only clip the first N minutes (0 = whole) — bounds whisper memory (12min OOMs under load)
 
 const run = (cmd, args) => new Promise((res) => execFile(cmd, args, { maxBuffer: 1 << 26 }, (e, so, se) => res({ e, out: (so || '') + (se || '') })))
 
@@ -58,9 +58,13 @@ const vids = await discover(sources)
 console.error(`found ${vids.length} fresh candidates`)
 writeFileSync(join(ROOT, 'queue.json'), JSON.stringify(vids, null, 2))
 
-const top = vids.slice(0, N)
+// process candidates until N are successfully clipped (skip past download-blocks / OOM failures)
 const done = []
-for (const v of top) {
+const attempted = []
+const MAXTRIES = N + Number(process.env.PIPE_TRIES || 3)
+for (const v of vids) {
+  if (done.length >= N || attempted.length >= MAXTRIES) break
+  attempted.push(v)
   console.error(`\n[2/3] ${v.title}  (${v.url})`)
   const file = await tryDownload(v.url, v.id)
   if (!file) { v.status = 'download-blocked'; continue }
@@ -71,14 +75,14 @@ for (const v of top) {
     v.status = 'done'; v.clips = clips; v.outDir = outDir
     done.push(v)
     console.error(`  -> ${clips.length} clips in ${outDir}`)
-  } catch (e) { v.status = 'clip-error: ' + e.message }
+  } catch (e) { v.status = 'clip-error: ' + e.message; console.error(`  ! ${e.message}`) }
 }
-markSeen(top.map((v) => v.id))
+markSeen(attempted.map((v) => v.id))
 
-console.log(`\n=== pipeline done: ${done.length}/${top.length} videos clipped ===`)
+console.log(`\n=== pipeline done: ${done.length}/${attempted.length} attempted ===`)
 for (const v of done) {
   console.log(`\n📹 ${v.title} — ${v.channel}\n   ${v.url}`)
   for (const c of v.clips) console.log(`   ${c.file}  (viral ${c.viralScore ?? '?'}, ${c.dur}s) "${c.hook || ''}"`)
 }
-for (const v of top.filter((v) => v.status !== 'done')) console.log(`   [${v.status}] ${v.title}`)
+for (const v of attempted.filter((v) => v.status !== 'done')) console.log(`   [${v.status}] ${v.title}`)
 if (!done.length) console.log('\nNote: nothing produced (downloads blocked or no candidates). Discovery + queue.json still work.')

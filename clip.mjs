@@ -6,7 +6,7 @@
 //   3) ffmpeg: cut, reformat to 1080x1920 with blurred bg, burn TikTok-style captions
 // Tools: ffmpeg, ffprobe, whisper (all local/free). Zero npm deps.
 import { execFile } from 'node:child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync } from 'node:fs'
 import { join, dirname, basename, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -44,9 +44,16 @@ function parseSrt(text) {
 }
 
 async function transcribe(file, workDir) {
-  const jsonp = join(workDir, basename(file, extname(file)) + '.json')
+  let jsonp = join(workDir, basename(file, extname(file)) + '.json')
   if (!existsSync(jsonp)) {
     await run('whisper', [file, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir], { cwd: workDir })
+  }
+  // whisper can exit 0 yet skip a file on "bad allocation" (OOM) — surface that clearly, and
+  // tolerate a differently-named output by picking up any json it did write.
+  if (!existsSync(jsonp)) {
+    const found = readdirSync(workDir).find((f) => f.endsWith('.json'))
+    if (found) jsonp = join(workDir, found)
+    else throw new Error('whisper produced no transcript (likely OOM/bad-allocation — try WHISPER_MODEL=tiny or a shorter PIPE_HEAD)')
   }
   const j = JSON.parse(readFileSync(jsonp, 'utf8'))
   const cues = (j.segments || []).map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((c) => c.text)
