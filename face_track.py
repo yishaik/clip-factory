@@ -13,12 +13,14 @@ video, start, dur = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
 cap = cv2.VideoCapture(video)
 cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 centers, sizes = [], []
+samples = 0
 t, step = start, 0.5
 while t < start + dur:
     cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
     ok, frame = cap.read()
     if not ok:
         break
+    samples += 1
     h, w = frame.shape[:2]
     sw = 480
     small = cv2.resize(frame, (sw, max(1, int(h * sw / w))))
@@ -31,11 +33,11 @@ while t < start + dur:
     t += step
 cap.release()
 
+frac = round(len(centers) / samples, 3) if samples else 0.0
 if len(centers) >= 3:
     arr = np.array(centers)
-    # use a trimmed median so a few stray B-roll faces don't drag the crop
-    med = float(np.median(arr))
-    std = float(np.std(arr))
-    print(json.dumps({"x": round(med, 4), "conf": len(centers), "std": round(std, 4), "size": round(float(np.median(sizes)), 4)}))
+    # trimmed median so a few stray B-roll faces don't drag the crop
+    print(json.dumps({"x": round(float(np.median(arr)), 4), "conf": len(centers), "frac": frac,
+                      "std": round(float(np.std(arr)), 4), "size": round(float(np.median(sizes)), 4)}))
 else:
-    print(json.dumps({"x": 0.5, "conf": len(centers), "std": 1.0}))
+    print(json.dumps({"x": 0.5, "conf": len(centers), "frac": frac, "std": 1.0}))

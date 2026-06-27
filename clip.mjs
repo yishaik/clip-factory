@@ -184,16 +184,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 ${events}`
 }
 
-// where to horizontally crop for vertical framing — follow the speaker's face (0..1), else centre
-async function faceX(input, win) {
-  if (process.env.CLIP_FRAME === 'fill' || process.env.CLIP_FRAME === 'blur') return 0.5
+// analyse the speaker's face over the clip: {x:0..1 centre, conf, frac:fraction of frames with a face}
+async function faceInfo(input, win) {
   try {
     const out = await run('python', [join(ROOT, 'face_track.py'), resolve(input), String(win.start), String(win.end - win.start)])
     const m = out.match(/\{[^{}]*"x"[^{}]*\}/)
-    if (m) { const j = JSON.parse(m[0]); if (j && j.conf >= 4 && typeof j.x === 'number') return j.x }
+    if (m) return JSON.parse(m[0])
   } catch {}
-  return 0.5
+  return { x: 0.5, conf: 0, frac: 0 }
 }
+
+const blurVf = (assArg) =>
+  `[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];` +
+  `[fg]scale=1040:-2:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2[bv];[bv]ass=${assArg}[v]`
 
 async function renderClip(input, win, idx, outDir, workDir, words) {
   const dur = win.end - win.start
@@ -201,13 +204,20 @@ async function renderClip(input, win, idx, outDir, workDir, words) {
   writeFileSync(assPath, buildAss(words || [], win, win.hook, process.env.CLIP_BRAND || ''))
   const assArg = basename(assPath) // ffmpeg cwd=workDir so the path is simple (libass-safe)
   const out = join(outDir, `clip-${idx}.mp4`)
-  // framing: 'smart' (default) crops around the speaker's face; 'fill' = centre zoom; 'blur' = fit + blurred bg
+  // framing: 'smart' (default) auto-picks per clip — crop around the speaker when a face is consistently
+  // present, else fall back to blurred-fit (safe for B-roll). 'fill'/'blur' force a mode.
   const frame = process.env.CLIP_FRAME || 'smart'
-  const X = frame === 'smart' ? await faceX(input, win) : 0.5
-  const vf = frame === 'blur'
-    ? `[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];` +
-      `[fg]scale=1040:-2:force_original_aspect_ratio=decrease[fgs];[bgb][fgs]overlay=(W-w)/2:(H-h)/2[bv];[bv]ass=${assArg}[v]`
-    : frame === 'fill'
+  let mode = frame, X = 0.5
+  if (frame === 'smart') {
+    const fi = await faceInfo(input, win)
+    // Haar is a sparse detector — even a clear talking head only registers a face in ~30-45% of frames,
+    // while B-roll sits near 0. Gate low so real speakers crop and only true B-roll falls back to blur.
+    if (fi.frac >= 0.15 && fi.conf >= 5) { mode = 'crop'; X = fi.x } else mode = 'blur'
+    console.error(`     framing: ${mode === 'crop' ? `crop x=${X.toFixed(2)}` : 'blur-fit'} (${Math.round((fi.frac || 0) * 100)}% faces)`)
+  }
+  const vf = mode === 'blur'
+    ? blurVf(assArg)
+    : mode === 'fill'
       ? `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bv];[bv]ass=${assArg}[v]`
       : `[0:v]scale=-2:1920[sc];[sc]crop=1080:1920:min(max(${X.toFixed(3)}*iw-540\\,0)\\,iw-1080):0[bv];[bv]ass=${assArg}[v]`
   await run('ffmpeg', ['-y', '-ss', String(win.start), '-t', String(dur), '-i', resolve(input),
