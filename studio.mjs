@@ -14,6 +14,7 @@ try { // .env loader (GEMINI_API_KEY etc.)
   const e = join(ROOT, '.env'); if (existsSync(e)) for (const l of readFileSync(e, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '') }
 } catch {}
 const PORT = Number(process.env.PORT || 8013)
+const TOKEN = process.env.STUDIO_TOKEN || '' // if set, every request needs ?t=TOKEN (gate for public tunnels)
 const jobs = new Map()
 let seq = 0
 const json = (res, code, o) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(o))
@@ -53,6 +54,7 @@ const server = createServer(async (req, res) => {
   try {
     const u = new URL(req.url, `http://localhost:${PORT}`)
     const p = u.pathname
+    if (TOKEN && u.searchParams.get('t') !== TOKEN) return json(res, 401, { error: 'unauthorized — open the URL with ?t=YOUR_TOKEN' })
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) return res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(await readFile(join(ROOT, 'studio', 'index.html')))
 
     if (req.method === 'GET' && p === '/api/discover') {

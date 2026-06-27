@@ -18,3 +18,5 @@ _*.png
 
 generated/
 .gen-recent.json
+.studio-token
+cf-config.yml

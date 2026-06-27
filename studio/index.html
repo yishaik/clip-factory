@@ -75,6 +75,8 @@
 </div>
 <script>
 const $=s=>document.querySelector(s), log=$('#log'), results=$('#results');
+const TOK=new URLSearchParams(location.search).get('t')||'';
+const wt=u=>u+(TOK?(u.includes('?')?'&':'?')+'t='+encodeURIComponent(TOK):'');
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
   $('#p-clip').classList.toggle('on',t.dataset.m==='clip'); $('#p-gen').classList.toggle('on',t.dataset.m==='gen');
@@ -83,7 +85,7 @@ function setLog(lines){ log.style.display='block'; log.textContent=lines.join('\
 async function poll(id, btn){
   while(true){
     await new Promise(r=>setTimeout(r,2500));
-    const j=await (await fetch('/api/job?id='+id)).json();
+    const j=await (await fetch(wt('/api/job?id='+id))).json();
     setLog(j.log||[]);
     if(j.status==='done'){ render(j.result); btn.disabled=false; btn.innerHTML=btn.dataset.t; return; }
     if(j.status==='error'){ setLog([...(j.log||[]),'❌ failed']); btn.disabled=false; btn.innerHTML=btn.dataset.t; return; }
@@ -92,7 +94,7 @@ async function poll(id, btn){
 function render(r){
   results.innerHTML='';
   (r?.clips||[]).forEach(c=>{
-    const src='/file?p='+encodeURIComponent(c.file);
+    const src=wt('/file?p='+encodeURIComponent(c.file));
     const el=document.createElement('div'); el.className='clip';
     el.innerHTML=`<video src="${src}" controls preload="metadata"></video><div class="meta">`+
       (c.viral!=null?`<div class="vir">🔥 viral ${c.viral}</div>`:'')+
@@ -104,16 +106,16 @@ function render(r){
 async function start(btn, url, body){
   btn.disabled=true; btn.dataset.t=btn.innerHTML; btn.innerHTML='<span class="spin"></span>working…';
   results.innerHTML=''; setLog(['starting…']);
-  const j=await (await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).json();
+  const j=await (await fetch(wt(url),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).json();
   if(j.error){ setLog(['error: '+j.error]); btn.disabled=false; btn.innerHTML=btn.dataset.t; return; }
   poll(j.id, btn);
 }
 $('#c-go').onclick=()=>{ const url=$('#c-url').value.trim(); if(!url)return alert('paste a YouTube URL'); start($('#c-go'),'/api/clip',{url,n:+$('#c-n').value,frame:$('#c-frame').value,head:+$('#c-head').value}); };
 $('#g-go').onclick=()=>start($('#g-go'),'/api/generate',{topic:$('#g-topic').value.trim(),voice:$('#g-voice').value});
-$('#c-disc').onclick=async e=>{ e.target.textContent='loading…'; const {vids}=await (await fetch('/api/discover')).json(); const L=$('#c-list'); L.style.display='block';
+$('#c-disc').onclick=async e=>{ e.target.textContent='loading…'; const {vids}=await (await fetch(wt('/api/discover'))).json(); const L=$('#c-list'); L.style.display='block';
   L.innerHTML=vids.map(v=>`<div class="li" data-u="${v.url}"><b>[${v.score}]</b> ${v.title} — ${v.channel}</div>`).join(''); e.target.textContent='🔥 Discover hot videos';
   L.querySelectorAll('.li').forEach(li=>li.onclick=()=>{$('#c-url').value=li.dataset.u; L.style.display='none';}); };
-$('#g-trends').onclick=async e=>{ e.target.textContent='loading…'; const {topics}=await (await fetch('/api/trends')).json(); const L=$('#g-list'); L.style.display='block';
+$('#g-trends').onclick=async e=>{ e.target.textContent='loading…'; const {topics}=await (await fetch(wt('/api/trends'))).json(); const L=$('#g-list'); L.style.display='block';
   L.innerHTML=topics.map(t=>`<div class="li">${t}</div>`).join(''); e.target.textContent='🔥 Hot topics';
   L.querySelectorAll('.li').forEach(li=>li.onclick=()=>{$('#g-topic').value=li.textContent; L.style.display='none';}); };
 </script>
