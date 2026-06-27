@@ -15,3 +15,5 @@ queue.json
 _*.png
 
 .vercel
+
+generated/

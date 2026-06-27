@@ -51,7 +51,7 @@ function parseSrt(text) {
   return cues
 }
 
-async function transcribe(file, workDir) {
+export async function transcribe(file, workDir) {
   let jsonp = join(workDir, basename(file, extname(file)) + '.json')
   if (!existsSync(jsonp)) {
     await run('whisper', [file, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir], { cwd: workDir })
@@ -204,7 +204,7 @@ const aT = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 
 const assEsc = (t) => String(t).replace(/[{}\\]/g, '').replace(/\n/g, ' ')
 
 // build a styled ASS: word-by-word karaoke captions (lower third) + a hook title card (top, first 3s) + optional brand
-function buildAss(words, win, hook, brand) {
+export function buildAss(words, win, hook, brand) {
   const dur = win.end - win.start
   const W = words.filter((w) => w.end > win.start && w.start < win.end)
     .map((w) => ({ start: Math.max(0, w.start - win.start), end: Math.min(dur, Math.max(0.1, w.end - win.start)), text: assEsc(w.text) }))
