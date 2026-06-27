@@ -11,6 +11,14 @@ import { join, dirname, basename, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
+// minimal .env loader so GEMINI_API_KEY (cloud fallback) is available even in scheduled/headless runs
+try {
+  const envf = join(ROOT, '.env')
+  if (existsSync(envf)) for (const line of readFileSync(envf, 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/)
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
+  }
+} catch {}
 const HOST = process.env.OLLAMA_HOST || 'http://localhost:11434'
 const MODEL = process.env.CLIP_MODEL || 'gemma4:e4b'
 const WMODEL = process.env.WHISPER_MODEL || 'base'
@@ -107,15 +115,43 @@ function scoreWindow(w) {
   return s
 }
 
-async function gemma(prompt, { json = false, ms = 180000 } = {}) {
+// local Ollama (Gemma) — free, but OOMs under memory pressure on this machine
+async function ollama(prompt, { json = false, ms = 180000 } = {}) {
   try {
     const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
     const opts = { temperature: 0.6 }; if (!process.env.CLIP_GPU) opts.num_gpu = 0 // CPU by default (small GPU is full)
     const body = { model: MODEL, prompt, stream: false, options: opts }; if (json) body.format = 'json'
     const r = await fetch(`${HOST}/api/generate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: ctrl.signal }).finally(() => clearTimeout(t))
     if (!r.ok) return null
-    return ((await r.json()).response || '').trim()
+    return ((await r.json()).response || '').trim() || null
   } catch { return null }
+}
+
+// cloud fallback (Gemini Flash) — used when local Gemma is down/OOM, so hooks + ranking stay reliable
+async function geminiCloud(prompt, { json = false } = {}) {
+  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
+  if (!key) return null
+  try {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 60000)
+    const model = process.env.CLIP_CLOUD_MODEL || 'gemini-flash-latest'
+    const gc = { temperature: 0.6 }; if (json) gc.responseMimeType = 'application/json'
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: gc }), signal: ctrl.signal,
+    }).finally(() => clearTimeout(t))
+    if (!r.ok) return null
+    const j = await r.json()
+    return ((j.candidates && j.candidates[0]?.content?.parts?.[0]?.text) || '').trim() || null
+  } catch { return null }
+}
+
+// try local first (free), fall back to cloud (reliable)
+async function gemma(prompt, opts = {}) {
+  if (process.env.CLIP_NO_LOCAL !== '1') {
+    const local = await ollama(prompt, opts)
+    if (local) return local
+  }
+  return await geminiCloud(prompt, opts)
 }
 
 // LLM decision engine: score each candidate window for short-form viral potential, in ONE call.
