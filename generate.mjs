@@ -41,8 +41,9 @@ const recentTopics = () => { try { return JSON.parse(readFileSync(RECENTF, 'utf8
 const rememberTopic = (t) => { const r = recentTopics(); r.push(t); writeFileSync(RECENTF, JSON.stringify(r.slice(-12))) }
 
 async function script(topics) {
+  const custom = (process.env.GEN_TOPIC || '').trim()
   const avoid = recentTopics()
-  const prompt = `You are a top short-form video writer. ${topics.length ? `From these LIVE trending topics pick the ONE with the best story for a 35-45s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
+  const prompt = `You are a top short-form video writer. ${custom ? `Make a 35-45s vertical video about: "${custom}".` : topics.length ? `From these LIVE trending topics pick the ONE with the best story for a 35-45s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${!custom && avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
 Return ONLY JSON:
 {"topic":"...","hook":"<4-7 word punchy on-screen title>","script":"<narration: 6-9 short punchy sentences, ~110-150 words, conversational, killer first line, ends thought-provoking. No emojis/hashtags/stage-directions>","scenes":["<image prompt 1>","<image prompt 2>","...5-6 cinematic photo prompts that visually follow the script beat by beat; each a vivid, specific, photorealistic vertical scene (no text, no logos)"]}`
   return JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
@@ -143,6 +144,7 @@ async function main() {
     '-filter_complex', `[0:v]drawbox=x=0:y=1230:w=1080:h=690:color=black@0.32:t=fill,ass=gen.ass[v]`,
     '-map', '[v]', '-map', '1:a', '-t', String(dur), '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', out], { cwd: work })
   writeFileSync(join(OUT, slug + '.json'), JSON.stringify({ ...s, dur, file: out }, null, 2))
-  console.log(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${imgs.length} visuals · ${dur.toFixed(0)}s`)
+  console.error(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${imgs.length} visuals · ${dur.toFixed(0)}s`)
+  console.log(JSON.stringify({ outDir: OUT, topic: s.topic, script: s.script, clips: [{ file: out, hook: s.hook, dur: +dur.toFixed(0) }] }))
 }
 main().catch((e) => { console.error('ERR ' + e.message); process.exit(1) })
