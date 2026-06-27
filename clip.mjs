@@ -134,7 +134,7 @@ async function geminiCloud(prompt, { json = false, model, ms = 90000 } = {}) {
   try {
     const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
     const m = model || process.env.CLIP_CLOUD_MODEL || 'gemini-flash-latest'
-    const gc = { temperature: 0.6 }; if (json) gc.responseMimeType = 'application/json'
+    const gc = { temperature: 0.6, maxOutputTokens: 4096 }; if (json) gc.responseMimeType = 'application/json'
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: gc }), signal: ctrl.signal,
