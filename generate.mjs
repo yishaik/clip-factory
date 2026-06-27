@@ -36,8 +36,13 @@ async function gemini(prompt, { json = false, model = process.env.GEN_MODEL || '
   return (j.candidates && j.candidates[0]?.content?.parts?.[0]?.text || '').trim()
 }
 
+const RECENTF = join(ROOT, '.gen-recent.json')
+const recentTopics = () => { try { return JSON.parse(readFileSync(RECENTF, 'utf8')) } catch { return [] } }
+const rememberTopic = (t) => { const r = recentTopics(); r.push(t); writeFileSync(RECENTF, JSON.stringify(r.slice(-12))) }
+
 async function script(topics) {
-  const prompt = `You are a top short-form video writer. ${topics.length ? `From these LIVE trending topics pick the ONE with the best story for a 35-45s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}
+  const avoid = recentTopics()
+  const prompt = `You are a top short-form video writer. ${topics.length ? `From these LIVE trending topics pick the ONE with the best story for a 35-45s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
 Return ONLY JSON:
 {"topic":"...","hook":"<4-7 word punchy on-screen title>","script":"<narration: 6-9 short punchy sentences, ~110-150 words, conversational, killer first line, ends thought-provoking. No emojis/hashtags/stage-directions>","scenes":["<image prompt 1>","<image prompt 2>","...5-6 cinematic photo prompts that visually follow the script beat by beat; each a vivid, specific, photorealistic vertical scene (no text, no logos)"]}`
   return JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
@@ -101,7 +106,7 @@ async function main() {
   if (!KEY) throw new Error('GEMINI_API_KEY missing')
   mkdirSync(OUT, { recursive: true }); const work = join(OUT, '_work'); mkdirSync(work, { recursive: true })
   console.error('hot topics...'); const topics = await hotTopics(); console.error('trending: ' + topics.slice(0, 8).join(' · '))
-  console.error('script (Gemini 3.1 Pro)...'); const s = await script(topics)
+  console.error('script (Gemini 3.1 Pro)...'); const s = await script(topics); rememberTopic(s.topic)
   console.error(`TOPIC: ${s.topic}\nHOOK: ${s.hook}\nSCENES: ${(s.scenes || []).length}\n`)
 
   const wav = join(work, 'voice.wav')
