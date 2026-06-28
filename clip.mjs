@@ -6,7 +6,7 @@
 //   3) ffmpeg: cut, reformat to 1080x1920 with blurred bg, burn TikTok-style captions
 // Tools: ffmpeg, ffprobe, whisper (all local/free). Zero npm deps.
 import { execFile } from 'node:child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync, statSync } from 'node:fs'
 import { join, dirname, basename, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -61,9 +61,9 @@ function parseWhisper(jsonp, offset = 0) {
 }
 
 // run whisper on one audio/video file, return the path to the json it wrote (or null on OOM/skip)
-async function whisperRun(input, workDir) {
+async function whisperRun(input, workDir, lang = '') {
   const args = [input, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir]
-  if (process.env.WHISPER_LANG) args.push('--language', process.env.WHISPER_LANG, '--task', 'transcribe') // keep source language, never translate
+  if (lang) args.push('--language', lang, '--task', 'transcribe') // forced language -> never auto-detect or translate
   await run('whisper', args, { cwd: workDir })
   const stem = basename(input, extname(input))
   let jsonp = join(workDir, stem + '.json')
@@ -78,12 +78,17 @@ async function whisperRun(input, workDir) {
 export async function transcribe(file, workDir) {
   file = resolve(file); workDir = resolve(workDir) // whisper runs with cwd=workDir, so inputs must be absolute
   const cacheF = join(workDir, 'transcript.json')
-  if (existsSync(cacheF)) { try { const c = JSON.parse(readFileSync(cacheF, 'utf8')); if (c.cues?.length) return c } catch {} }
+  // cache is keyed to the EXACT input (size+mtime) — a different/changed video can never reuse a stale
+  // transcript (the kind of cross-run contamination that bit us before). Also keyed to model+chunk.
+  const st = (() => { try { return statSync(file) } catch { return null } })()
+  const sig = st ? `${st.size}:${Math.round(st.mtimeMs)}:${WMODEL}:${process.env.WHISPER_CHUNK_SEC ?? 150}` : ''
+  if (existsSync(cacheF)) { try { const c = JSON.parse(readFileSync(cacheF, 'utf8')); if (c.sig === sig && c.cues?.length) return { cues: c.cues, words: c.words } } catch {} }
   const CHUNK = Number(process.env.WHISPER_CHUNK_SEC ?? 150), OVERLAP = 1.5
   const dur = await probeDuration(file).catch(() => 0)
   let result
+  let lang = process.env.WHISPER_LANG || '' // empty = auto-detect on the FIRST chunk, then lock it for the rest
   if (!CHUNK || (dur && dur <= CHUNK + 5)) {
-    const jp = await whisperRun(file, workDir)
+    const jp = await whisperRun(file, workDir, lang)
     if (!jp) throw new Error('whisper produced no transcript (likely OOM/bad-allocation — try WHISPER_MODEL=tiny)')
     result = parseWhisper(jp, 0)
   } else {
@@ -93,9 +98,10 @@ export async function transcribe(file, workDir) {
       const len = Math.min(CHUNK + OVERLAP, dur - start + 0.1)
       const wav = join(workDir, `chunk_${i}.wav`)
       await run('ffmpeg', ['-y', '-ss', String(start), '-t', String(len), '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav])
-      const jp = await whisperRun(wav, workDir).catch(() => null)
+      const jp = await whisperRun(wav, workDir, lang).catch(() => null)
       try { rmSync(wav, { force: true }) } catch {}
       if (!jp) { console.error(`  ! transcribe chunk ${i} (@${start.toFixed(0)}s) failed — skipping`); continue }
+      if (!lang) { try { lang = JSON.parse(readFileSync(jp, 'utf8')).language || ''; if (lang) console.error(`  transcribe: locked language = ${lang}`) } catch {} } // lock detected language across chunks
       const { cues, words } = parseWhisper(jp, start)
       for (const c of cues) if (c.start >= lastEnd - 0.05) { allCues.push(c); lastEnd = Math.max(lastEnd, c.end) }
       const lastW = () => (allWords.length ? allWords[allWords.length - 1].start : -1)
@@ -104,7 +110,7 @@ export async function transcribe(file, workDir) {
     if (!allCues.length) throw new Error('whisper produced no transcript across all chunks (try WHISPER_MODEL=tiny)')
     result = { cues: allCues, words: allWords }
   }
-  try { writeFileSync(cacheF, JSON.stringify(result)) } catch {}
+  try { writeFileSync(cacheF, JSON.stringify({ sig, ...result })) } catch {}
   return result
 }
 
