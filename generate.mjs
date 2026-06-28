@@ -3,7 +3,7 @@
 //  1) Google Trends hot topic  2) Gemini 3.1 Pro: pick topic + script + hook + per-scene image prompts
 //  3) Gemini neural TTS voiceover  4) Imagen 9:16 visuals (Ken-Burns slideshow)
 //  5) Whisper word timestamps -> karaoke captions  6) ffmpeg -> 1080x1920 mp4
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -118,6 +118,7 @@ async function main() {
   const dur = await probeDur(wav); console.error(`voice ${dur.toFixed(1)}s`)
 
   if (process.env.GEN_LANG && process.env.GEN_LANG !== 'en') process.env.WHISPER_LANG = process.env.GEN_LANG
+  try { rmSync(join(work, 'voice.json'), { force: true }) } catch {} // never reuse a previous run's transcript
   console.error('captions (Whisper)...'); const { words } = await transcribe(wav, work)
   const assPath = join(work, 'gen.ass'); writeFileSync(assPath, genAss(words, dur, s.hook))
 
