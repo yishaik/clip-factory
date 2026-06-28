@@ -20,3 +20,5 @@ generated/
 .gen-recent.json
 .studio-token
 cf-config.yml
+client_secret*.json
+.youtube-publish.json
