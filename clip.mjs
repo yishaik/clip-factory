@@ -353,8 +353,15 @@ async function faceInfo(input, win) {
     const m = out.match(/\{[^{}]*"x"[^{}]*\}/)
     if (m) return JSON.parse(m[0])
   } catch {}
-  return { x: 0.5, conf: 0, frac: 0 }
+  return { x: 0.5, y: 0.42, size: 0, conf: 0, frac: 0 }
 }
+
+// source pixel dimensions (for face-framed crop geometry)
+async function probeSize(file) {
+  try { const o = await run('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', file]); const [w, h] = o.trim().split('x').map(Number); if (w && h) return { w, h } } catch {}
+  return { w: 1920, h: 1080 }
+}
+const even = (n) => Math.max(2, Math.round(n / 2) * 2)
 
 const blurVf = (assArg) =>
   `[0:v]split=2[bg][fg];[bg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:4[bgb];` +
@@ -369,19 +376,41 @@ async function renderClip(input, win, idx, outDir, workDir, words) {
   // framing: 'smart' (default) auto-picks per clip — crop around the speaker when a face is consistently
   // present, else fall back to blurred-fit (safe for B-roll). 'fill'/'blur' force a mode.
   const frame = process.env.CLIP_FRAME || 'smart'
-  let mode = frame, X = 0.5
+  let mode = frame, fi = { x: 0.5, y: 0.42, size: 0 }
   if (frame === 'smart') {
-    const fi = await faceInfo(input, win)
+    fi = await faceInfo(input, win)
     // Haar is a sparse detector — even a clear talking head only registers a face in ~30-45% of frames,
     // while B-roll sits near 0. Gate low so real speakers crop and only true B-roll falls back to blur.
-    if (fi.frac >= 0.15 && fi.conf >= 5) { mode = 'crop'; X = fi.x } else mode = 'blur'
-    console.error(`     framing: ${mode === 'crop' ? `crop x=${X.toFixed(2)}` : 'blur-fit'} (${Math.round((fi.frac || 0) * 100)}% faces)`)
+    mode = (fi.frac >= 0.15 && fi.conf >= 5) ? 'crop' : 'blur'
   }
-  const vf = mode === 'blur'
-    ? blurVf(assArg)
-    : mode === 'fill'
-      ? `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bv];[bv]ass=${assArg}[v]`
-      : `[0:v]scale=-2:1920[sc];[sc]crop=1080:1920:min(max(${X.toFixed(3)}*iw-540\\,0)\\,iw-1080):0[bv];[bv]ass=${assArg}[v]`
+  let vf, note = mode
+  if (mode === 'blur') vf = blurVf(assArg)
+  else if (mode === 'fill') vf = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[bv];[bv]ass=${assArg}[v]`
+  else { // face-framed 9:16 crop sized to the head's vertical TRAVEL across the clip (ylo..yhi) plus
+         // head/chin room — so a still speaker crops tight and a moving one loosens just enough to never
+         // cut the head. Clamped to source bounds; falls back to x-only crop if no extent data.
+    const { w: sw, h: sh } = await probeSize(resolve(input))
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+    const HEAD = Number(process.env.CLIP_HEADROOM || 0.07), CHIN = Number(process.env.CLIP_CHINROOM || 0.10)
+    const TARGET = Number(process.env.CLIP_FACE_TARGET || 0.32)
+    if (fi.ylo != null && fi.yhi != null && fi.yhi > fi.ylo) {
+      const topF = clamp(fi.ylo - HEAD, 0, 1), botF = clamp(fi.yhi + CHIN, 0, 1)
+      const targetHc = ((fi.size || 0.25) * sh) / TARGET    // nice chest-up zoom (face ~TARGET of frame)
+      const travelHc = (botF - topF) * sh                   // must at least span the head's vertical travel
+      let Hc = clamp(Math.max(targetHc, travelHc), sh * 0.45, sh) // looser of the two; never over-zoom or exceed source
+      let Wc = Hc * 9 / 16
+      if (Wc > sw) { Wc = sw; Hc = Wc * 16 / 9 }            // portrait/near-square source: fit width
+      Wc = even(Math.min(Wc, sw)); Hc = even(Math.min(Hc, sh))
+      const top = even(clamp(topF * sh, 0, sh - Hc))         // keep headroom above the HIGHEST head position
+      const left = even(clamp(fi.x * sw - Wc / 2, 0, sw - Wc))
+      vf = `[0:v]crop=${Wc}:${Hc}:${left}:${top},scale=1080:1920,setsar=1[bv];[bv]ass=${assArg}[v]`
+      note = `crop face x=${fi.x.toFixed(2)} head ${fi.ylo.toFixed(2)}-${fi.yhi.toFixed(2)} zoom ${(sh / Hc).toFixed(2)}x`
+    } else { // face present but no extent data -> legacy x-only crop (full height)
+      vf = `[0:v]scale=-2:1920[sc];[sc]crop=1080:1920:min(max(${fi.x.toFixed(3)}*iw-540\\,0)\\,iw-1080):0[bv];[bv]ass=${assArg}[v]`
+      note = `crop x=${fi.x.toFixed(2)}`
+    }
+  }
+  if (frame === 'smart') console.error(`     framing: ${note} (${Math.round((fi.frac || 0) * 100)}% faces)`)
   await run('ffmpeg', ['-y', '-ss', String(win.start), '-t', String(dur), '-i', resolve(input),
     '-filter_complex', vf, '-map', '[v]', '-map', '0:a', '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', resolve(out)], { cwd: workDir })
   return out

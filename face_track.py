@@ -12,7 +12,7 @@ except Exception as e:
 video, start, dur = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
 cap = cv2.VideoCapture(video)
 cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-centers, sizes = [], []
+xs, ys, sizes, tops, bots = [], [], [], [], []   # face centre x/y, height frac, and top/bottom edges
 samples = 0
 t, step = start, 0.5
 while t < start + dur:
@@ -23,21 +23,28 @@ while t < start + dur:
     samples += 1
     h, w = frame.shape[:2]
     sw = 480
-    small = cv2.resize(frame, (sw, max(1, int(h * sw / w))))
+    sh = max(1, int(h * sw / w))
+    small = cv2.resize(frame, (sw, sh))
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
     faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(36, 36))
     if len(faces):
         fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])  # the largest (closest) face
-        centers.append((fx + fw / 2.0) / sw)
-        sizes.append(fw / sw)
+        xs.append((fx + fw / 2.0) / sw)
+        ys.append((fy + fh / 2.0) / sh)
+        sizes.append(fh / sh)                                    # face height as a fraction of frame height
+        tops.append(fy / sh)                                     # face top edge (highest = smallest)
+        bots.append((fy + fh) / sh)                              # face bottom edge (chin)
     t += step
 cap.release()
 
-frac = round(len(centers) / samples, 3) if samples else 0.0
-if len(centers) >= 3:
-    arr = np.array(centers)
-    # trimmed median so a few stray B-roll faces don't drag the crop
-    print(json.dumps({"x": round(float(np.median(arr)), 4), "conf": len(centers), "frac": frac,
-                      "std": round(float(np.std(arr)), 4), "size": round(float(np.median(sizes)), 4)}))
+frac = round(len(xs) / samples, 3) if samples else 0.0
+if len(xs) >= 3:
+    ax = np.array(xs)
+    # robust percentiles so a stray detection doesn't blow up the vertical extent; ylo/yhi bracket the
+    # head's travel across the clip so clip.mjs can size the crop to keep the head in-frame the whole time.
+    print(json.dumps({"x": round(float(np.median(ax)), 4), "y": round(float(np.median(ys)), 4),
+                      "size": round(float(np.median(sizes)), 4),
+                      "ylo": round(float(np.percentile(tops, 5)), 4), "yhi": round(float(np.percentile(bots, 95)), 4),
+                      "conf": len(xs), "frac": frac, "std": round(float(np.std(ax)), 4)}))
 else:
-    print(json.dumps({"x": 0.5, "conf": len(centers), "frac": frac, "std": 1.0}))
+    print(json.dumps({"x": 0.5, "y": 0.42, "size": 0.0, "ylo": 0.15, "yhi": 0.7, "conf": len(xs), "frac": frac, "std": 1.0}))
