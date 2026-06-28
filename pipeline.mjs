@@ -79,6 +79,39 @@ for (const v of vids) {
 }
 markSeen(attempted.map((v) => v.id))
 
+// ── PUBLISH stage (opt-in: PIPE_PUBLISH=1) — auto-upload the best clips to YouTube ──
+// Picks clips scoring >= PIPE_PUBLISH_MIN, top PIPE_PUBLISH_MAX, privacy PIPE_PUBLISH_PRIVACY.
+// Records uploads in .published.json so re-runs never double-post the same file.
+if (process.env.PIPE_PUBLISH && done.length) {
+  const MIN = Number(process.env.PIPE_PUBLISH_MIN || 85)
+  const MAX = Number(process.env.PIPE_PUBLISH_MAX || 3)
+  const PRIV = process.env.PIPE_PUBLISH_PRIVACY || 'unlisted'
+  const logf = join(ROOT, '.published.json')
+  const pub = existsSync(logf) ? JSON.parse(readFileSync(logf, 'utf8')) : []
+  const already = new Set(pub.map((p) => p.file))
+  const cand = done.flatMap((v) => (v.clips || []).map((c) => ({ ...c, _title: v.title, _url: v.url })))
+    .filter((c) => (c.viralScore ?? 0) >= MIN && !already.has(c.file))
+    .sort((a, b) => (b.viralScore ?? 0) - (a.viralScore ?? 0))
+    .slice(0, MAX)
+  const DRY = !!process.env.PIPE_PUBLISH_DRY
+  console.log(`\n[publish] ${cand.length} clip(s) scoring >=${MIN} -> YouTube (${PRIV})${DRY ? ' [DRY RUN]' : ''}`)
+  if (cand.length && !DRY) {
+    const { uploadShort } = await import('./publish.mjs')
+    for (const c of cand) {
+      const title = (c.hook || c._title || 'Short').slice(0, 95)
+      const desc = `From "${c._title}"\n${c._url}\nAuto-clipped by Clip Factory.`
+      try {
+        const r = await uploadShort(c.file, title, desc, PRIV)
+        console.log(`   ✅ ${r.url}  "${title}"`)
+        pub.push({ file: c.file, id: r.id, url: r.url, title, score: c.viralScore ?? null })
+      } catch (e) { console.log(`   ❌ ${title.slice(0, 40)} — ${String(e.message).slice(0, 140)}`) }
+    }
+    writeFileSync(logf, JSON.stringify(pub, null, 2))
+  } else if (DRY) {
+    for (const c of cand) console.log(`   would publish: ${(c.hook || c._title || 'Short').slice(0, 60)}  (viral ${c.viralScore ?? '?'})  ${c.file}`)
+  }
+}
+
 console.log(`\n=== pipeline done: ${done.length}/${attempted.length} attempted ===`)
 for (const v of done) {
   console.log(`\n📹 ${v.title} — ${v.channel}\n   ${v.url}`)

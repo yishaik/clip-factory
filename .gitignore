@@ -22,3 +22,4 @@ generated/
 cf-config.yml
 client_secret*.json
 .youtube-publish.json
+.published.json
