@@ -117,7 +117,7 @@ export async function transcribe(file, workDir) {
 // group consecutive cues into windows of MIN..MAX seconds, breaking on long gaps
 // Sentence-aware windows: each clip STARTS at a thought-start (after a pause or a sentence end)
 // and ENDS at a sentence end, so it stands on its own and leads with its hook.
-function buildWindows(cues) {
+export function buildWindows(cues) {
   const GAP = Number(process.env.CLIP_GAP || 0.8)
   const MIN = Number(process.env.CLIP_MIN || 14)
   const TARGET = Number(process.env.CLIP_TARGET || 26)
@@ -229,7 +229,7 @@ async function gemma(prompt, opts = {}) {
 }
 
 // LLM decision engine: score each candidate window for short-form viral potential, in ONE call.
-async function rankWindowsLLM(windows) {
+export async function rankWindowsLLM(windows) {
   const cands = windows.slice(0, 10) // heuristic pre-filter -> LLM precision-ranks these
   const list = cands.map((w, i) => `[${i}] (${Math.round(w.end - w.start)}s) ${w.text.slice(0, 200)}`).join('\n\n')
   const prompt = `You are a world-class short-form video editor (TikTok/Reels/YouTube Shorts). Below are numbered transcript segments from one long video. Score each 0-100 for viral potential as a STANDALONE short clip.\n` +
@@ -246,6 +246,58 @@ async function rankWindowsLLM(windows) {
   cands.forEach((w, i) => { const r = byI.get(i); if (r && r.score != null) { w.llmScore = Number(r.score) || 0; w.hook = (r.hook || '').toString().slice(0, 80); w.reason = (r.reason || '').toString().slice(0, 120); hit++ } })
   if (!hit) return null
   return cands.filter((w) => w.llmScore != null).sort((a, b) => b.llmScore - a.llmScore)
+}
+
+const nearestIndex = (arr, val) => { let bi = 0, bd = Infinity; for (let i = 0; i < arr.length; i++) { const d = Math.abs(arr[i] - val); if (d < bd) { bd = d; bi = i } } return bi }
+const endsSentence = (t) => /[.!?]["')\]]?$/.test((t || '').trim())
+const overlapFrac = (a, b) => { const o = Math.max(0, Math.min(a.end, b.end) - Math.max(a.start, b.start)); return o / Math.min(a.end - a.start, b.end - b.start) }
+
+// snap an LLM-proposed [ps,pe] moment to clean cue boundaries: begin at a thought-start, end on a
+// sentence end, and keep the duration within [MIN,MAX]. Returns a window {start,end,cues,text} or null.
+function snapMoment(cues, ps, pe, MIN, MAX) {
+  if (!(pe > ps) || !cues.length) return null
+  let si = nearestIndex(cues.map((c) => c.start), ps)
+  for (let k = si; k >= Math.max(0, si - 2); k--) if (k === 0 || endsSentence(cues[k - 1].text)) { si = k; break } // back up to a thought-start
+  let ei = Math.max(si, nearestIndex(cues.map((c) => c.end), pe))
+  const start = cues[si].start
+  while (ei < cues.length - 1 && cues[ei].end - start < MIN) ei++              // grow to reach MIN
+  while (ei > si && cues[ei].end - start > MAX) ei--                            // shrink to respect MAX
+  for (let k = ei; k < Math.min(cues.length, ei + 2); k++) if (endsSentence(cues[k].text) && cues[k].end - start <= MAX) { ei = k; break } // land on a sentence end
+  const end = cues[ei].end
+  if (end - start < MIN || end - start > MAX + 2) return null
+  const seg = cues.slice(si, ei + 1)
+  return { start, end, cues: seg, text: seg.map((c) => c.text).join(' ') }
+}
+
+// PRIMARY decision engine: hand the LLM the whole timestamped transcript and let it choose the most
+// viral standalone moments WITH their own start/end times (like a real editor), instead of only ranking
+// pre-cut heuristic windows. Proposed times are snapped to clean sentence boundaries + de-overlapped.
+export async function pickMoments(cues, n) {
+  if (!cues?.length) return null
+  const MIN = Number(process.env.CLIP_MIN || 14), MAX = Number(process.env.CLIP_MAX || 44)
+  const want = Math.min(12, n + 3)
+  const lines = cues.map((c) => `${c.start.toFixed(1)} ${c.text}`).join('\n')
+  const prompt = `You are a world-class short-form video editor (TikTok/Reels/YouTube Shorts). Below is a timestamped transcript of one long video — each line is "<startSeconds> <text>".\n` +
+    `Find the ${want} BEST standalone short-clip moments, each ${MIN}-${MAX} seconds long. Choose START and END seconds so the clip OPENS on a strong hook and CLOSES on a complete thought — it must make sense with zero outside context.\n` +
+    `Reward: a gripping first line, an emotional/surprising/contrarian payoff, a quotable line, a complete mini-story. Penalize: rambling, starting mid-thought, filler.\n` +
+    `Return ONLY JSON {"clips":[{"start":<sec>,"end":<sec>,"score":<0-100>,"hook":"<punchy 4-8 word caption, no hashtags>","reason":"<one short clause>"}]}, best first.\n\nTRANSCRIPT:\n${lines}`
+  const raw = await decide(prompt, { json: true, ms: 120000 })
+  if (!raw) return null
+  let arr
+  try { const j = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw); arr = j.clips || j.moments || (Array.isArray(j) ? j : null) } catch { return null }
+  if (!Array.isArray(arr) || !arr.length) return null
+  const picks = []
+  for (const m of arr) {
+    const w = snapMoment(cues, Number(m.start), Number(m.end), MIN, MAX)
+    if (!w) continue
+    w.llmScore = Number(m.score) || 0; w.hook = (m.hook || '').toString().slice(0, 80); w.reason = (m.reason || '').toString().slice(0, 140)
+    picks.push(w)
+  }
+  if (!picks.length) return null
+  picks.sort((a, b) => b.llmScore - a.llmScore)
+  const kept = [] // drop near-duplicate moments (keep the higher-scored)
+  for (const w of picks) if (!kept.some((k) => overlapFrac(k, w) > 0.5)) kept.push(w)
+  return kept
 }
 
 const aT = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = (s % 60); return `${h}:${String(m).padStart(2, '0')}:${sec.toFixed(2).padStart(5, '0')}` }
@@ -345,17 +397,21 @@ export async function makeClips(input, { n = 3, outDir, ai = false } = {}) {
   console.error('transcribing (whisper ' + WMODEL + ', word timestamps)...')
   const { cues, words } = await transcribe(input, workDir)
   if (!cues.length) throw new Error('no speech transcribed')
-  let windows = buildWindows(cues).map((w) => ({ ...w, score: scoreWindow(w) })).sort((a, b) => b.score - a.score)
 
-  // decision engine: LLM virality ranking (default), heuristic fallback
-  let how = 'heuristic'
+  // decision engine. PRIMARY: let the LLM read the whole timestamped transcript and choose viral
+  // moments WITH their own boundaries (snapped to sentences). FALLBACK: rank pre-cut heuristic windows.
+  let how = 'heuristic', windows = null
   if (process.env.CLIP_NO_LLM !== '1') {
-    console.error('decision engine: scoring segments for virality (LLM)...')
-    const llm = await rankWindowsLLM(windows).catch(() => null)
-    if (llm && llm.length) { windows = llm; how = 'LLM virality' }
+    console.error('decision engine: LLM picking viral moments + boundaries...')
+    const picked = await pickMoments(cues, n).catch((e) => { console.error('  pickMoments failed: ' + e.message); return null })
+    if (picked && picked.length) { windows = picked; how = 'LLM moments' }
+  }
+  if (!windows) {
+    windows = buildWindows(cues).map((w) => ({ ...w, score: scoreWindow(w) })).sort((a, b) => b.score - a.score)
+    if (process.env.CLIP_NO_LLM !== '1') { const r = await rankWindowsLLM(windows).catch(() => null); if (r && r.length) { windows = r; how = 'LLM ranking (fallback)' } }
   }
   const chosen = windows.slice(0, n)
-  console.error(`transcribed ${cues.length} cues -> ${windows.length} candidate windows -> top ${chosen.length} (${how})`)
+  console.error(`transcribed ${cues.length} cues -> ${windows.length} moments -> top ${chosen.length} (${how})`)
 
   const results = []
   for (let i = 0; i < chosen.length; i++) {
