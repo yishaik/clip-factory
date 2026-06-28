@@ -46,9 +46,9 @@ async function script(topics) {
   const lang = LANGS[process.env.GEN_LANG || 'en'] || 'English'
   const avoid = recentTopics()
   const prompt = `You are a top short-form video writer. ${custom ? `Make a 35-45s vertical video about: "${custom}".` : topics.length ? `From these LIVE trending topics pick the ONE with the best story for a 35-45s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${!custom && avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
-Write "topic", "hook" and "script" in ${lang}. Keep the "scenes" image prompts in ENGLISH (for the image model).
+Write "topic", "hook" and "script" in ${lang}. Keep "style" and the "scenes" image prompts in ENGLISH (for the image model).
 Return ONLY JSON:
-{"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}: 6-9 short punchy sentences, ~110-150 words, conversational, killer first line, ends thought-provoking. No emojis/hashtags/stage-directions>","scenes":["<English image prompt 1>","<English image prompt 2>","...5-6 cinematic photo prompts that visually follow the script beat by beat; each a vivid, specific, photorealistic vertical scene (no text, no logos)"]}`
+{"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}: 6-9 short punchy sentences, ~110-150 words, conversational, killer first line, ends thought-provoking. No emojis/hashtags/stage-directions>","style":"<ONE art-direction line applied to EVERY scene for a cohesive look: a specific palette + lighting + film/lens look, e.g. 'moody teal-and-amber, low-key dramatic lighting, shallow depth of field, 35mm film grain, cinematic'>","scenes":["<English image prompt 1>","...5-6 photo prompts that follow the script beat by beat. Each: a vivid, specific subject AND an explicit shot type — VARY them across scenes (wide establishing, medium, tight close-up, detail/insert, low-angle) for visual rhythm. Describe ONLY subject+composition (the shared 'style' supplies palette/lighting). CRITICAL: every scene must be visually COMPATIBLE with the chosen style — same mood, time-of-day and palette feasibility; do NOT pick subjects that fight it (e.g. if the style is dark/low-key, avoid bright daylight or snow-white scenes — choose subjects that can plausibly carry that palette). photorealistic, vertical 9:16, no text, no logos."]}`
   return JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
 }
 
@@ -64,10 +64,12 @@ async function tts(text, wav, work) {
   await run('ffmpeg', ['-y', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcm, wav])
 }
 
-async function image(prompt, png) {
+async function image(prompt, png, style = '') {
+  const look = style || 'cinematic, photorealistic, dramatic lighting' // shared art-direction -> cohesive look across scenes
+  // style FIRST so the image model weights the shared palette/lighting highly (keeps scenes cohesive)
   const r = await fetch(`${GAPI}/imagen-4.0-fast-generate-001:predict?key=${KEY}`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ instances: [{ prompt: prompt + ', cinematic, photorealistic, dramatic lighting, vertical' }], parameters: { sampleCount: 1, aspectRatio: '9:16' } }),
+    body: JSON.stringify({ instances: [{ prompt: `${look}. ${prompt}. Vertical 9:16, no text, no watermark` }], parameters: { sampleCount: 1, aspectRatio: '9:16' } }),
   })
   const j = await r.json()
   const data = j?.predictions?.[0]?.bytesBase64Encoded
@@ -122,10 +124,10 @@ async function main() {
   console.error('captions (Whisper)...'); const { words } = await transcribe(wav, work)
   const assPath = join(work, 'gen.ass'); writeFileSync(assPath, genAss(words, dur, s.hook))
 
-  console.error('generating visuals (Imagen)...')
+  console.error(`generating visuals (Imagen)...  style: ${s.style || '(default)'}`)
   const scenes = (s.scenes && s.scenes.length ? s.scenes : [s.topic]).slice(0, 6)
   const imgs = []
-  for (let i = 0; i < scenes.length; i++) { const png = join(work, `img${i}.png`); if (await image(scenes[i], png)) { imgs.push(png); console.error(`  img ${i + 1}/${scenes.length} ok`) } }
+  for (let i = 0; i < scenes.length; i++) { const png = join(work, `img${i}.png`); if (await image(scenes[i], png, s.style)) { imgs.push(png); console.error(`  img ${i + 1}/${scenes.length} ok`) } }
   if (!imgs.length) throw new Error('no images generated')
 
   console.error('Ken-Burns slideshow (varied motion + crossfades)...')
