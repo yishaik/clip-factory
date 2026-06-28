@@ -14,7 +14,9 @@ try { // .env loader (GEMINI_API_KEY etc.)
   const e = join(ROOT, '.env'); if (existsSync(e)) for (const l of readFileSync(e, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '') }
 } catch {}
 const PORT = Number(process.env.PORT || 8013)
-const TOKEN = process.env.STUDIO_TOKEN || '' // if set, every request needs ?t=TOKEN (gate for public tunnels)
+const norm = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
+const underRoot = (p) => norm(p).startsWith(norm(ROOT)) && /\.mp4$/i.test(p) // a video file inside the project
+const TOKEN = process.env.STUDIO_TOKEN || (existsSync(join(ROOT, '.studio-token')) ? readFileSync(join(ROOT, '.studio-token'), 'utf8').trim() : '') // ?t=TOKEN gate for public tunnels
 const jobs = new Map()
 let seq = 0
 const json = (res, code, o) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(o))
@@ -75,13 +77,18 @@ const server = createServer(async (req, res) => {
       const { topic = '', voice = 'Charon', lang = 'en' } = await body(req)
       return json(res, 200, { id: startJob('generate', ['generate.mjs'], { GEN_TOPIC: topic, GEN_VOICE: voice, GEN_LANG: lang }) })
     }
+    if (req.method === 'POST' && p === '/api/publish') {
+      const { file = '', title = 'Short', privacy = 'unlisted' } = await body(req)
+      if (!underRoot(file)) return json(res, 400, { error: 'bad file' })
+      return json(res, 200, { id: startJob('publish', ['publish.mjs', file, title.slice(0, 95) || 'Short', 'Auto-clipped by Clip Factory.', privacy], {}) })
+    }
     if (req.method === 'GET' && p === '/api/job') {
       const job = jobs.get(u.searchParams.get('id')); if (!job) return json(res, 404, { error: 'no job' })
       return json(res, 200, { status: job.status, log: job.log.slice(-40), result: job.result })
     }
     if (req.method === 'GET' && p === '/file') {
       const path = u.searchParams.get('p') || ''
-      if (!path.startsWith(ROOT) || !path.endsWith('.mp4')) return json(res, 403, { error: 'forbidden' })
+      if (!underRoot(path)) return json(res, 403, { error: 'forbidden' })
       return serveVideo(req, res, path)
     }
     json(res, 404, { error: 'not found' })

@@ -91,6 +91,7 @@
 
   <div class="status" id="status"><div class="spin"></div><span id="statustxt">working…</span><span class="logbtn" id="logtoggle">log</span></div>
   <div class="log" id="log"></div>
+  <div id="pubbar" style="display:none;margin-top:18px;align-items:center;gap:10px"><span style="color:var(--mut);font-size:13px;font-weight:600">📺 Publish to YouTube as:</span><select id="pub-priv" style="width:auto"><option value="unlisted">Unlisted</option><option value="public">Public</option><option value="private">Private</option></select></div>
   <div class="results" id="results"></div>
 </div>
 <script>
@@ -118,13 +119,28 @@ async function poll(id, btn){
 }
 function done(btn){ btn.disabled=false; btn.innerHTML=btn.dataset.t; }
 function render(r){
-  results.innerHTML='';
-  (r?.clips||[]).forEach(c=>{ const src=wt('/file?p='+encodeURIComponent(c.file));
+  results.innerHTML=''; const clips=r?.clips||[];
+  $('#pubbar').style.display=clips.length?'flex':'none';
+  clips.forEach(c=>{ const src=wt('/file?p='+encodeURIComponent(c.file));
     const el=document.createElement('div'); el.className='clip';
     el.innerHTML=`<video src="${src}" controls preload="metadata"></video><div class="meta">`+
       (c.viral!=null?`<div class="vir">🔥 viral ${c.viral}</div>`:'')+
-      `<div class="hook">${(c.hook||'').replace(/</g,'&lt;')}</div><div class="sub">${c.dur||''}s</div><a href="${src}" download>⬇ download</a></div>`;
+      `<div class="hook">${(c.hook||'').replace(/</g,'&lt;')}</div><div class="sub">${c.dur||''}s</div>`+
+      `<a href="${src}" download>⬇ download</a> &nbsp;·&nbsp; <a href="#" class="pub">📤 publish</a><div class="puburl" style="margin-top:6px;font-size:12.5px"></div></div>`;
+    el.querySelector('.pub').onclick=ev=>{ ev.preventDefault(); publishClip(c, el); };
     results.appendChild(el); });
+}
+async function publishClip(c, el){
+  const a=el.querySelector('.pub'), out=el.querySelector('.puburl');
+  a.textContent='⏳ uploading…'; a.style.pointerEvents='none';
+  try{
+    const j=await (await fetch(wt('/api/publish'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({file:c.file,title:c.hook||'Short',privacy:$('#pub-priv').value})})).json();
+    if(j.error){ a.textContent='❌ '+j.error; a.style.pointerEvents='auto'; return; }
+    while(true){ await new Promise(r=>setTimeout(r,2500));
+      const s=await (await fetch(wt('/api/job?id='+j.id))).json();
+      if(s.status==='done'){ const url=s.result?.url; a.style.display='none'; out.innerHTML=url?`✅ <a href="${url}" target="_blank">${url}</a>`:'published'; return; }
+      if(s.status==='error'){ a.textContent='❌ failed — see log'; a.style.pointerEvents='auto'; setLog(s.log); return; } }
+  }catch{ a.textContent='❌ error'; a.style.pointerEvents='auto'; }
 }
 async function start(btn, url, body){
   btn.disabled=true; btn.dataset.t=btn.innerHTML; btn.innerHTML='working…';
