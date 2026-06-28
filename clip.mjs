@@ -51,25 +51,61 @@ function parseSrt(text) {
   return cues
 }
 
-export async function transcribe(file, workDir) {
-  let jsonp = join(workDir, basename(file, extname(file)) + '.json')
-  if (!existsSync(jsonp)) {
-    const args = [file, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir]
-    if (process.env.WHISPER_LANG) args.push('--language', process.env.WHISPER_LANG, '--task', 'transcribe') // keep source language, never translate
-    await run('whisper', args, { cwd: workDir })
-  }
-  // whisper can exit 0 yet skip a file on "bad allocation" (OOM) — surface that clearly, and
-  // tolerate a differently-named output by picking up any json it did write.
-  if (!existsSync(jsonp)) {
-    const found = readdirSync(workDir).find((f) => f.endsWith('.json'))
-    if (found) jsonp = join(workDir, found)
-    else throw new Error('whisper produced no transcript (likely OOM/bad-allocation — try WHISPER_MODEL=tiny or a shorter PIPE_HEAD)')
-  }
+// parse a whisper json into {cues, words}, shifting every timestamp by `offset` seconds
+function parseWhisper(jsonp, offset = 0) {
   const j = JSON.parse(readFileSync(jsonp, 'utf8'))
-  const cues = (j.segments || []).map((s) => ({ start: s.start, end: s.end, text: (s.text || '').trim() })).filter((c) => c.text)
+  const cues = (j.segments || []).map((s) => ({ start: s.start + offset, end: s.end + offset, text: (s.text || '').trim() })).filter((c) => c.text)
   const words = []
-  for (const s of (j.segments || [])) for (const w of (s.words || [])) { const t = (w.word || '').trim(); if (t && w.end > w.start) words.push({ start: w.start, end: w.end, text: t }) }
+  for (const s of (j.segments || [])) for (const w of (s.words || [])) { const t = (w.word || '').trim(); if (t && w.end > w.start) words.push({ start: w.start + offset, end: w.end + offset, text: t }) }
   return { cues, words }
+}
+
+// run whisper on one audio/video file, return the path to the json it wrote (or null on OOM/skip)
+async function whisperRun(input, workDir) {
+  const args = [input, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir]
+  if (process.env.WHISPER_LANG) args.push('--language', process.env.WHISPER_LANG, '--task', 'transcribe') // keep source language, never translate
+  await run('whisper', args, { cwd: workDir })
+  const stem = basename(input, extname(input))
+  let jsonp = join(workDir, stem + '.json')
+  if (!existsSync(jsonp)) { const f = readdirSync(workDir).find((x) => x.endsWith('.json') && x.startsWith(stem)); if (f) jsonp = join(workDir, f) }
+  return existsSync(jsonp) ? jsonp : null
+}
+
+// Transcribe to timed cues + words. CHUNKED by default: split into WHISPER_CHUNK_SEC windows,
+// extract a small 16k-mono wav per chunk, transcribe sequentially (one at a time so peak memory
+// stays bounded — whisper "bad allocation" OOMs on long inputs under load), then offset + merge.
+// WHISPER_CHUNK_SEC=0 forces the legacy single-shot path. Result cached to transcript.json.
+export async function transcribe(file, workDir) {
+  file = resolve(file); workDir = resolve(workDir) // whisper runs with cwd=workDir, so inputs must be absolute
+  const cacheF = join(workDir, 'transcript.json')
+  if (existsSync(cacheF)) { try { const c = JSON.parse(readFileSync(cacheF, 'utf8')); if (c.cues?.length) return c } catch {} }
+  const CHUNK = Number(process.env.WHISPER_CHUNK_SEC ?? 150), OVERLAP = 1.5
+  const dur = await probeDuration(file).catch(() => 0)
+  let result
+  if (!CHUNK || (dur && dur <= CHUNK + 5)) {
+    const jp = await whisperRun(file, workDir)
+    if (!jp) throw new Error('whisper produced no transcript (likely OOM/bad-allocation — try WHISPER_MODEL=tiny)')
+    result = parseWhisper(jp, 0)
+  } else {
+    const allCues = [], allWords = []
+    let lastEnd = 0
+    for (let i = 0, start = 0; start < dur; i++, start += CHUNK) {
+      const len = Math.min(CHUNK + OVERLAP, dur - start + 0.1)
+      const wav = join(workDir, `chunk_${i}.wav`)
+      await run('ffmpeg', ['-y', '-ss', String(start), '-t', String(len), '-i', file, '-vn', '-ac', '1', '-ar', '16000', wav])
+      const jp = await whisperRun(wav, workDir).catch(() => null)
+      try { rmSync(wav, { force: true }) } catch {}
+      if (!jp) { console.error(`  ! transcribe chunk ${i} (@${start.toFixed(0)}s) failed — skipping`); continue }
+      const { cues, words } = parseWhisper(jp, start)
+      for (const c of cues) if (c.start >= lastEnd - 0.05) { allCues.push(c); lastEnd = Math.max(lastEnd, c.end) }
+      const lastW = () => (allWords.length ? allWords[allWords.length - 1].start : -1)
+      for (const w of words) if (w.start > lastW()) allWords.push(w)
+    }
+    if (!allCues.length) throw new Error('whisper produced no transcript across all chunks (try WHISPER_MODEL=tiny)')
+    result = { cues: allCues, words: allWords }
+  }
+  try { writeFileSync(cacheF, JSON.stringify(result)) } catch {}
+  return result
 }
 
 // group consecutive cues into windows of MIN..MAX seconds, breaking on long gaps
