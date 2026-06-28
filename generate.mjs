@@ -45,11 +45,26 @@ async function script(topics) {
   const custom = (process.env.GEN_TOPIC || '').trim()
   const lang = LANGS[process.env.GEN_LANG || 'en'] || 'English'
   const avoid = recentTopics()
-  const prompt = `You are a top short-form video writer. ${custom ? `Make a 35-45s vertical video about: "${custom}".` : topics.length ? `From these LIVE trending topics pick the ONE with the best story for a 35-45s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${!custom && avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
+  const secs = Math.max(15, Math.min(60, Number(process.env.GEN_SECONDS || 30)))   // target length
+  const words = Math.round(secs * 2.4)                                              // ~conversational TTS rate
+  const sents = Math.max(4, Math.round(words / 15))                                 // short punchy sentences
+  const nScenes = Math.max(4, Math.min(6, Math.round(secs / 6)))
+  const prompt = `You are a top short-form video writer. ${custom ? `Make a ~${secs}s vertical video about: "${custom}".` : topics.length ? `From these LIVE trending topics pick the ONE with the best story for a ~${secs}s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${!custom && avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
 Write "topic", "hook" and "script" in ${lang}. Keep "style" and the "scenes" image prompts in ENGLISH (for the image model).
+LENGTH IS CRITICAL: the script must be ~${words} words (HARD ceiling ${words + 12}) — it will be read aloud and must land near ${secs}s. Be ruthless: a killer first line, then ${sents}-${sents + 1} SHORT punchy sentences, cut every filler word, no throat-clearing, end on a thought-provoking line. Tight beats > completeness.
 Return ONLY JSON:
-{"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}: 6-9 short punchy sentences, ~110-150 words, conversational, killer first line, ends thought-provoking. No emojis/hashtags/stage-directions>","style":"<ONE art-direction line applied to EVERY scene for a cohesive look: a specific palette + lighting + film/lens look, e.g. 'moody teal-and-amber, low-key dramatic lighting, shallow depth of field, 35mm film grain, cinematic'>","scenes":["<English image prompt 1>","...5-6 photo prompts that follow the script beat by beat. Each: a vivid, specific subject AND an explicit shot type — VARY them across scenes (wide establishing, medium, tight close-up, detail/insert, low-angle) for visual rhythm. Describe ONLY subject+composition (the shared 'style' supplies palette/lighting). CRITICAL: every scene must be visually COMPATIBLE with the chosen style — same mood, time-of-day and palette feasibility; do NOT pick subjects that fight it (e.g. if the style is dark/low-key, avoid bright daylight or snow-white scenes — choose subjects that can plausibly carry that palette). photorealistic, vertical 9:16, no text, no logos."]}`
-  return JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
+{"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}, ~${words} words, conversational, fast-paced. No emojis/hashtags/stage-directions>","style":"<ONE art-direction line applied to EVERY scene for a cohesive look: a specific palette + lighting + film/lens look, e.g. 'moody teal-and-amber, low-key dramatic lighting, shallow depth of field, 35mm film grain, cinematic'>","scenes":["<English image prompt 1>","...${nScenes} photo prompts that follow the script beat by beat. Each: a vivid, specific subject AND an explicit shot type — VARY them across scenes (wide establishing, medium, tight close-up, detail/insert, low-angle) for visual rhythm. Describe ONLY subject+composition (the shared 'style' supplies palette/lighting). CRITICAL: every scene must be visually COMPATIBLE with the chosen style — same mood, time-of-day and palette feasibility; do NOT pick subjects that fight it (e.g. if the style is dark/low-key, avoid bright daylight or snow-white scenes — choose subjects that can plausibly carry that palette). photorealistic, vertical 9:16, no text, no logos."]}`
+  const out = JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
+  out._maxWords = words + 12
+  return out
+}
+
+// hard length guard: if the model overshot, keep whole sentences up to the word budget (preserves a clean end)
+function fitWords(text, maxWords) {
+  const sents = String(text).match(/[^.!?]+[.!?]+/g) || [String(text)]
+  const kept = []; let n = 0
+  for (const s of sents) { const w = s.trim().split(/\s+/).filter(Boolean).length; if (n + w > maxWords && kept.length) break; kept.push(s.trim()); n += w }
+  return kept.join(' ')
 }
 
 async function tts(text, wav, work) {
@@ -113,7 +128,10 @@ async function main() {
   mkdirSync(OUT, { recursive: true }); const work = join(OUT, '_work'); mkdirSync(work, { recursive: true })
   console.error('hot topics...'); const topics = await hotTopics(); console.error('trending: ' + topics.slice(0, 8).join(' · '))
   console.error('script (Gemini 3.1 Pro)...'); const s = await script(topics); rememberTopic(s.topic)
-  console.error(`TOPIC: ${s.topic}\nHOOK: ${s.hook}\nSCENES: ${(s.scenes || []).length}\n`)
+  const rawWords = s.script.split(/\s+/).filter(Boolean).length
+  s.script = fitWords(s.script, s._maxWords)                 // enforce the length ceiling
+  const finalWords = s.script.split(/\s+/).filter(Boolean).length
+  console.error(`TOPIC: ${s.topic}\nHOOK: ${s.hook}\nSCENES: ${(s.scenes || []).length} · words: ${rawWords}->${finalWords} (cap ${s._maxWords})\n`)
 
   const wav = join(work, 'voice.wav')
   console.error('neural voiceover (Gemini TTS)...'); await tts(s.script, wav, work)
