@@ -81,8 +81,9 @@ async function tts(text, wav, work) {
 
 async function image(prompt, png, style = '') {
   const look = style || 'cinematic, photorealistic, dramatic lighting' // shared art-direction -> cohesive look across scenes
+  const imgModel = process.env.GEN_IMAGE_MODEL || 'imagen-4.0-generate-001'        // standard (sharper) over -fast
   // style FIRST so the image model weights the shared palette/lighting highly (keeps scenes cohesive)
-  const r = await fetch(`${GAPI}/imagen-4.0-fast-generate-001:predict?key=${KEY}`, {
+  const r = await fetch(`${GAPI}/${imgModel}:predict?key=${KEY}`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ instances: [{ prompt: `${look}. ${prompt}. Vertical 9:16, no text, no watermark` }], parameters: { sampleCount: 1, aspectRatio: '9:16' } }),
   })
@@ -115,8 +116,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,Arial,74,&H0000FFFF,&H00FFFFFF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,6,3,2,90,90,360,1
-Style: Hook,Arial,62,&H00FFFFFF,&H00FFFFFF,&H00101010,&HB0000000,1,0,0,0,100,100,0,0,3,5,1,8,70,70,170,1
+Style: Cap,Arial Black,84,&H0000FFFF,&H00FFFFFF,&H00101010,&H00000000,1,0,0,0,100,100,0,0,1,7,4,2,80,80,360,1
+Style: Hook,Arial Black,64,&H00FFFFFF,&H00FFFFFF,&H00101010,&HC0000000,1,0,0,0,100,100,0,0,3,6,2,8,70,70,180,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -188,7 +189,7 @@ async function main() {
     parts.push(`${prev}[${i}:v]xfade=transition=${TRANS[(i - 1) % TRANS.length]}:duration=${XF}:offset=${off}${lbl}`)
     prev = lbl
   }
-  parts.push(`${prev}drawbox=x=0:y=1230:w=1080:h=690:color=black@0.32:t=fill,ass=gen.ass[v]`)
+  parts.push(`${prev}ass=gen.ass[v]`) // strong outline+shadow on the captions replaces the old flat backdrop band
   // audio: voice alone, or voice + music ducked when the voice is speaking
   let aMap = `${voiceIdx}:a`
   if (musIdx >= 0) {
