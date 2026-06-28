@@ -67,13 +67,13 @@ const server = createServer(async (req, res) => {
       catch { return json(res, 200, { topics: [] }) }
     }
     if (req.method === 'POST' && p === '/api/clip') {
-      const { url, n = 3, frame = 'smart', head = 10 } = await body(req)
+      const { url, n = 3, frame = 'smart', head = 10, lang = '' } = await body(req)
       if (!url) return json(res, 400, { error: 'url required' })
-      return json(res, 200, { id: startJob('clip', ['clipone.mjs', url, String(n)], { CLIP_FRAME: frame, PIPE_HEAD: String(head) }) })
+      return json(res, 200, { id: startJob('clip', ['clipone.mjs', url, String(n)], { CLIP_FRAME: frame, PIPE_HEAD: String(head), WHISPER_LANG: lang }) })
     }
     if (req.method === 'POST' && p === '/api/generate') {
-      const { topic = '', voice = 'Charon' } = await body(req)
-      return json(res, 200, { id: startJob('generate', ['generate.mjs'], { GEN_TOPIC: topic, GEN_VOICE: voice }) })
+      const { topic = '', voice = 'Charon', lang = 'en' } = await body(req)
+      return json(res, 200, { id: startJob('generate', ['generate.mjs'], { GEN_TOPIC: topic, GEN_VOICE: voice, GEN_LANG: lang }) })
     }
     if (req.method === 'GET' && p === '/api/job') {
       const job = jobs.get(u.searchParams.get('id')); if (!job) return json(res, 404, { error: 'no job' })

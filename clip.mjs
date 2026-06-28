@@ -54,7 +54,9 @@ function parseSrt(text) {
 export async function transcribe(file, workDir) {
   let jsonp = join(workDir, basename(file, extname(file)) + '.json')
   if (!existsSync(jsonp)) {
-    await run('whisper', [file, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir], { cwd: workDir })
+    const args = [file, '--model', WMODEL, '--word_timestamps', 'True', '--output_format', 'json', '--output_dir', workDir]
+    if (process.env.WHISPER_LANG) args.push('--language', process.env.WHISPER_LANG, '--task', 'transcribe') // keep source language, never translate
+    await run('whisper', args, { cwd: workDir })
   }
   // whisper can exit 0 yet skip a file on "bad allocation" (OOM) — surface that clearly, and
   // tolerate a differently-named output by picking up any json it did write.

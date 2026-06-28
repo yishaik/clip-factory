@@ -3,120 +3,145 @@
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>Clip Factory Studio</title>
 <style>
-  :root{--bg:#0c0a14;--card:#15121f;--line:#241d33;--ink:#f1ecff;--mut:#a99fc6;--acc:#a855f7;--acc2:#ec4899;--good:#22c55e}
+  :root{--bg:#0b0913;--card:#15121f;--card2:#1a1628;--line:#272036;--ink:#f3eeff;--mut:#9b90ba;--acc:#a855f7;--acc2:#ec4899;--good:#34d399}
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font:15px/1.55 system-ui,Segoe UI,Roboto,sans-serif;background:radial-gradient(1100px 500px at 70% -10%,#1c1430,#0c0a14);color:var(--ink);min-height:100vh}
-  .wrap{max-width:1000px;margin:0 auto;padding:22px}
-  h1{font-size:26px;font-weight:900}h1 span{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-  .sub{color:var(--mut);margin:2px 0 18px;font-size:14px}
-  .tabs{display:flex;gap:8px;margin-bottom:16px}
-  .tab{padding:10px 20px;border-radius:12px;background:var(--card);border:1px solid var(--line);cursor:pointer;font-weight:700}
-  .tab.on{background:linear-gradient(135deg,var(--acc),var(--acc2));border:0;color:#fff}
-  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;display:none}
-  .panel.on{display:block}
-  label{display:block;font-size:13px;color:var(--mut);margin:12px 0 5px;font-weight:600}
-  input,select,textarea{width:100%;font:inherit;background:#0e0b1a;border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:11px 13px}
-  textarea{min-height:64px;resize:vertical}
-  .row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1;min-width:130px}
-  .btn{margin-top:16px;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border:0;border-radius:12px;padding:13px 26px;font-weight:800;cursor:pointer;font-size:15px}
-  .btn:disabled{opacity:.5;cursor:default}
-  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
-  .list{margin-top:10px;max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:10px}
-  .li{padding:9px 12px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13px}.li:hover{background:#1b1630}
+  body{font:16px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);
+    background:radial-gradient(1200px 600px at 80% -15%,#231640,#0b0913 60%),var(--bg);min-height:100vh}
+  .wrap{max-width:760px;margin:0 auto;padding:26px 18px 60px}
+  header{text-align:center;margin-bottom:24px}
+  .logo{font-size:30px;font-weight:900;letter-spacing:-.5px}
+  .logo span{background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+  .tag{color:var(--mut);font-size:14px;margin-top:4px}
+  .modes{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px}
+  .mode{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px 16px;cursor:pointer;text-align:center;transition:.15s;position:relative}
+  .mode:hover{border-color:#3a2f55;transform:translateY(-2px)}
+  .mode.on{border-color:transparent;background:linear-gradient(135deg,rgba(168,85,247,.22),rgba(236,72,153,.18));box-shadow:0 0 0 1.5px var(--acc) inset}
+  .mode .ic{font-size:26px}.mode .t{font-weight:800;margin-top:6px}.mode .d{color:var(--mut);font-size:12.5px;margin-top:2px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:20px;padding:22px}
+  .panel{display:none}.panel.on{display:block}
+  label{display:block;font-size:12.5px;letter-spacing:.3px;text-transform:uppercase;color:var(--mut);margin:16px 0 6px;font-weight:700}
+  label:first-child{margin-top:0}
+  input,select,textarea{width:100%;font:inherit;background:#0d0a18;border:1px solid var(--line);color:var(--ink);border-radius:12px;padding:13px 15px;transition:.15s}
+  input:focus,select:focus,textarea:focus{outline:0;border-color:var(--acc)}
+  .row{display:flex;gap:12px;flex-wrap:wrap}.row>div{flex:1;min-width:120px}
+  .pill{display:inline-flex;align-items:center;gap:6px;background:#0d0a18;border:1px solid var(--line);color:var(--mut);border-radius:999px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;margin-top:8px}
+  .pill:hover{border-color:var(--acc);color:var(--ink)}
+  .list{margin-top:10px;max-height:240px;overflow:auto;border:1px solid var(--line);border-radius:12px;background:#0d0a18}
+  .li{padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer;font-size:13.5px}.li:last-child{border:0}.li:hover{background:#1a1430}
   .li b{color:var(--acc2)}
-  .log{margin-top:16px;background:#08060f;border:1px solid var(--line);border-radius:10px;padding:12px;font:12px/1.5 ui-monospace,monospace;color:#b9aee0;max-height:200px;overflow:auto;white-space:pre-wrap;display:none}
-  .results{margin-top:18px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
-  .clip{background:#0e0b1a;border:1px solid var(--line);border-radius:14px;overflow:hidden}
-  .clip video{width:100%;display:block;background:#000;aspect-ratio:9/16;object-fit:cover}
-  .clip .meta{padding:10px 12px}.clip .hook{font-weight:700;font-size:14px}.clip .vir{color:var(--acc2);font-size:12px;font-weight:700}
-  .clip a{display:inline-block;margin-top:6px;color:var(--acc);font-size:13px}
-  .hint{color:var(--mut);font-size:12px;margin-top:4px}
-  .spin{display:inline-block;width:13px;height:13px;border:2px solid #ffffff44;border-top-color:#fff;border-radius:50%;animation:s 1s linear infinite;vertical-align:-2px;margin-right:7px}
+  .go{margin-top:22px;width:100%;background:linear-gradient(135deg,var(--acc),var(--acc2));color:#fff;border:0;border-radius:14px;padding:15px;font-weight:800;font-size:16px;cursor:pointer;transition:.15s}
+  .go:hover{filter:brightness(1.07)}.go:disabled{opacity:.55;cursor:default}
+  .status{margin-top:18px;display:none;align-items:center;gap:10px;font-weight:600;color:var(--ink)}
+  .status.on{display:flex}
+  .spin{width:16px;height:16px;border:2.5px solid #ffffff33;border-top-color:#fff;border-radius:50%;animation:s 1s linear infinite;flex:none}
   @keyframes s{to{transform:rotate(360deg)}}
+  .logbtn{margin-left:auto;font-size:12px;color:var(--mut);cursor:pointer;text-decoration:underline}
+  .log{margin-top:10px;background:#08060f;border:1px solid var(--line);border-radius:12px;padding:12px 14px;font:12px/1.55 ui-monospace,monospace;color:#a99cd0;max-height:180px;overflow:auto;white-space:pre-wrap;display:none}
+  .results{margin-top:20px;display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px}
+  .clip{background:var(--card2);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .clip video{width:100%;display:block;background:#000;aspect-ratio:9/16;object-fit:cover}
+  .clip .meta{padding:11px 13px}.clip .vir{color:var(--acc2);font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.5px}
+  .clip .hook{font-weight:700;font-size:14px;margin-top:2px}.clip .sub{color:var(--mut);font-size:12px;margin-top:3px}
+  .clip a{display:inline-block;margin-top:8px;color:var(--acc);font-size:13px;font-weight:600}
+  .hint{color:var(--mut);font-size:12.5px;margin-top:8px}
 </style></head>
 <body><div class="wrap">
-  <h1>Clip<span>Factory</span> Studio</h1>
-  <p class="sub">Two ways to make a vertical short — clip a real video, or generate one from scratch. You pick the source and the edit.</p>
+  <header>
+    <div class="logo">Clip<span>Factory</span> Studio</div>
+    <div class="tag">Make a vertical short — clip a real video, or generate one from scratch.</div>
+  </header>
 
-  <div class="tabs">
-    <div class="tab on" data-m="clip">✂️ Clip a video</div>
-    <div class="tab" data-m="gen">✨ Generate from scratch</div>
+  <div class="modes">
+    <div class="mode on" data-m="clip"><div class="ic">✂️</div><div class="t">Clip a video</div><div class="d">turn a real video into viral clips</div></div>
+    <div class="mode" data-m="gen"><div class="ic">✨</div><div class="t">Generate</div><div class="d">an original short from a topic</div></div>
   </div>
 
-  <!-- CLIP -->
-  <div class="panel on" id="p-clip">
-    <label>YouTube URL</label>
-    <input id="c-url" placeholder="https://www.youtube.com/watch?v=…"/>
-    <button class="btn ghost" id="c-disc" style="margin-top:10px;padding:9px 16px;font-size:13px">🔥 Discover hot videos</button>
-    <div class="list" id="c-list" style="display:none"></div>
-    <div class="row">
-      <div><label>Clips</label><input id="c-n" type="number" value="3" min="1" max="8"/></div>
-      <div><label>Framing</label><select id="c-frame"><option value="smart">Smart (auto)</option><option value="fill">Fill (centre zoom)</option><option value="blur">Blur background</option></select></div>
-      <div><label>Use first … min</label><input id="c-head" type="number" value="10" min="2" max="40"/></div>
+  <div class="card">
+    <!-- CLIP -->
+    <div class="panel on" id="p-clip">
+      <label>YouTube link</label>
+      <input id="c-url" placeholder="https://www.youtube.com/watch?v=…"/>
+      <span class="pill" id="c-disc">🔥 Discover hot videos</span>
+      <div class="list" id="c-list" style="display:none"></div>
+      <div class="row">
+        <div><label>Clips</label><input id="c-n" type="number" value="3" min="1" max="8"/></div>
+        <div><label>Framing</label><select id="c-frame"><option value="smart">Smart (auto)</option><option value="fill">Fill — zoom</option><option value="blur">Blur background</option></select></div>
+      </div>
+      <div class="row">
+        <div><label>Language</label><select id="c-lang"><option value="">Auto-detect</option><option value="he">Hebrew</option><option value="en">English</option><option value="es">Spanish</option><option value="ar">Arabic</option></select></div>
+        <div><label>Use first … min</label><input id="c-head" type="number" value="10" min="2" max="40"/></div>
+      </div>
+      <button class="go" id="c-go">✂️  Make clips</button>
     </div>
-    <button class="btn" id="c-go">Make clips →</button>
-  </div>
 
-  <!-- GENERATE -->
-  <div class="panel" id="p-gen">
-    <label>Topic <span class="hint">— leave blank to auto-pick a live trending topic</span></label>
-    <input id="g-topic" placeholder="e.g. the science of why we dream (or blank for trending)"/>
-    <button class="btn ghost" id="g-trends" style="margin-top:10px;padding:9px 16px;font-size:13px">🔥 Hot topics</button>
-    <div class="list" id="g-list" style="display:none"></div>
-    <div class="row">
-      <div><label>Voice</label><select id="g-voice"><option>Charon</option><option>Puck</option><option>Kore</option><option>Aoede</option><option>Fenrir</option></select></div>
+    <!-- GENERATE -->
+    <div class="panel" id="p-gen">
+      <label>Topic</label>
+      <input id="g-topic" placeholder="e.g. why we dream — or leave blank for a trending topic"/>
+      <span class="pill" id="g-trends">🔥 Hot topics</span>
+      <div class="list" id="g-list" style="display:none"></div>
+      <div class="row">
+        <div><label>Language</label><select id="g-lang"><option value="en">English</option><option value="he">Hebrew</option><option value="es">Spanish</option><option value="ar">Arabic</option><option value="fr">French</option></select></div>
+        <div><label>Voice</label><select id="g-voice"><option>Charon</option><option>Puck</option><option>Kore</option><option>Aoede</option><option>Fenrir</option></select></div>
+      </div>
+      <button class="go" id="g-go">✨  Generate video</button>
+      <p class="hint">AI script + neural voice + AI visuals · ~3–4 min.</p>
     </div>
-    <button class="btn" id="g-go">Generate video →</button>
-    <p class="hint">Generates AI voice + AI visuals (~3-4 min).</p>
   </div>
 
+  <div class="status" id="status"><div class="spin"></div><span id="statustxt">working…</span><span class="logbtn" id="logtoggle">log</span></div>
   <div class="log" id="log"></div>
   <div class="results" id="results"></div>
 </div>
 <script>
-const $=s=>document.querySelector(s), log=$('#log'), results=$('#results');
+const $=s=>document.querySelector(s), log=$('#log'), results=$('#results'), status=$('#status'), statustxt=$('#statustxt');
 const TOK=new URLSearchParams(location.search).get('t')||'';
 const wt=u=>u+(TOK?(u.includes('?')?'&':'?')+'t='+encodeURIComponent(TOK):'');
-document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
-  document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('on',x===t));
+const LS=localStorage;
+document.querySelectorAll('.mode').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.mode').forEach(x=>x.classList.toggle('on',x===t));
   $('#p-clip').classList.toggle('on',t.dataset.m==='clip'); $('#p-gen').classList.toggle('on',t.dataset.m==='gen');
 });
-function setLog(lines){ log.style.display='block'; log.textContent=lines.join('\n'); log.scrollTop=log.scrollHeight; }
+// remember language choices
+['c-lang','g-lang','g-voice','c-frame'].forEach(id=>{ const el=$('#'+id); const v=LS.getItem('cf_'+id); if(v)el.value=v; el.onchange=()=>LS.setItem('cf_'+id,el.value); });
+$('#logtoggle').onclick=()=>{ log.style.display=log.style.display==='block'?'none':'block'; };
+function setLog(lines){ log.textContent=(lines||[]).join('\n'); log.scrollTop=log.scrollHeight; }
+function setStatus(txt,on=true){ status.classList.toggle('on',on); statustxt.textContent=txt; }
 async function poll(id, btn){
   while(true){
     await new Promise(r=>setTimeout(r,2500));
-    const j=await (await fetch(wt('/api/job?id='+id))).json();
-    setLog(j.log||[]);
-    if(j.status==='done'){ render(j.result); btn.disabled=false; btn.innerHTML=btn.dataset.t; return; }
-    if(j.status==='error'){ setLog([...(j.log||[]),'❌ failed']); btn.disabled=false; btn.innerHTML=btn.dataset.t; return; }
+    let j; try{ j=await (await fetch(wt('/api/job?id='+id))).json(); }catch{ continue; }
+    setLog(j.log); const last=(j.log||[]).slice(-1)[0]||'working…'; setStatus(last);
+    if(j.status==='done'){ setStatus('✅ done',false); render(j.result); done(btn); return; }
+    if(j.status==='error'){ setStatus('❌ failed — open log',true); status.querySelector('.spin').style.display='none'; done(btn); return; }
   }
 }
+function done(btn){ btn.disabled=false; btn.innerHTML=btn.dataset.t; }
 function render(r){
   results.innerHTML='';
-  (r?.clips||[]).forEach(c=>{
-    const src=wt('/file?p='+encodeURIComponent(c.file));
+  (r?.clips||[]).forEach(c=>{ const src=wt('/file?p='+encodeURIComponent(c.file));
     const el=document.createElement('div'); el.className='clip';
     el.innerHTML=`<video src="${src}" controls preload="metadata"></video><div class="meta">`+
       (c.viral!=null?`<div class="vir">🔥 viral ${c.viral}</div>`:'')+
-      `<div class="hook">${c.hook||''}</div><div class="hint">${c.dur||''}s</div><a href="${src}" download>⬇ download</a></div>`;
-    results.appendChild(el);
-  });
-  if(!(r?.clips||[]).length) setLog([...(log.textContent?[log.textContent]:[]),'(no output)']);
+      `<div class="hook">${(c.hook||'').replace(/</g,'&lt;')}</div><div class="sub">${c.dur||''}s</div><a href="${src}" download>⬇ download</a></div>`;
+    results.appendChild(el); });
 }
 async function start(btn, url, body){
-  btn.disabled=true; btn.dataset.t=btn.innerHTML; btn.innerHTML='<span class="spin"></span>working…';
-  results.innerHTML=''; setLog(['starting…']);
-  const j=await (await fetch(wt(url),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).json();
-  if(j.error){ setLog(['error: '+j.error]); btn.disabled=false; btn.innerHTML=btn.dataset.t; return; }
+  btn.disabled=true; btn.dataset.t=btn.innerHTML; btn.innerHTML='working…';
+  results.innerHTML=''; setLog(['starting…']); status.querySelector('.spin').style.display='block'; setStatus('starting…');
+  let j; try{ j=await (await fetch(wt(url),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)})).json(); }catch(e){ setStatus('network error',true); done(btn); return; }
+  if(j.error){ setStatus('error: '+j.error,true); done(btn); return; }
   poll(j.id, btn);
 }
-$('#c-go').onclick=()=>{ const url=$('#c-url').value.trim(); if(!url)return alert('paste a YouTube URL'); start($('#c-go'),'/api/clip',{url,n:+$('#c-n').value,frame:$('#c-frame').value,head:+$('#c-head').value}); };
-$('#g-go').onclick=()=>start($('#g-go'),'/api/generate',{topic:$('#g-topic').value.trim(),voice:$('#g-voice').value});
-$('#c-disc').onclick=async e=>{ e.target.textContent='loading…'; const {vids}=await (await fetch(wt('/api/discover'))).json(); const L=$('#c-list'); L.style.display='block';
-  L.innerHTML=vids.map(v=>`<div class="li" data-u="${v.url}"><b>[${v.score}]</b> ${v.title} — ${v.channel}</div>`).join(''); e.target.textContent='🔥 Discover hot videos';
-  L.querySelectorAll('.li').forEach(li=>li.onclick=()=>{$('#c-url').value=li.dataset.u; L.style.display='none';}); };
-$('#g-trends').onclick=async e=>{ e.target.textContent='loading…'; const {topics}=await (await fetch(wt('/api/trends'))).json(); const L=$('#g-list'); L.style.display='block';
-  L.innerHTML=topics.map(t=>`<div class="li">${t}</div>`).join(''); e.target.textContent='🔥 Hot topics';
-  L.querySelectorAll('.li').forEach(li=>li.onclick=()=>{$('#g-topic').value=li.textContent; L.style.display='none';}); };
+$('#c-go').onclick=()=>{ const url=$('#c-url').value.trim(); if(!url)return alert('Paste a YouTube link first'); start($('#c-go'),'/api/clip',{url,n:+$('#c-n').value,frame:$('#c-frame').value,head:+$('#c-head').value,lang:$('#c-lang').value}); };
+$('#g-go').onclick=()=>start($('#g-go'),'/api/generate',{topic:$('#g-topic').value.trim(),voice:$('#g-voice').value,lang:$('#g-lang').value});
+$('#c-disc').onclick=async e=>{ const L=$('#c-list'); if(L.style.display==='block'){L.style.display='none';return;} e.target.textContent='loading…';
+  const {vids}=await (await fetch(wt('/api/discover'))).json(); L.style.display='block';
+  L.innerHTML=(vids||[]).map(v=>`<div class="li" data-u="${v.url}"><b>[${v.score}]</b> ${v.title} <span style="color:var(--mut)">— ${v.channel}</span></div>`).join('')||'<div class="li">none found</div>';
+  e.target.textContent='🔥 Discover hot videos'; L.querySelectorAll('.li[data-u]').forEach(li=>li.onclick=()=>{$('#c-url').value=li.dataset.u; L.style.display='none';}); };
+$('#g-trends').onclick=async e=>{ const L=$('#g-list'); if(L.style.display==='block'){L.style.display='none';return;} e.target.textContent='loading…';
+  const {topics}=await (await fetch(wt('/api/trends'))).json(); L.style.display='block';
+  L.innerHTML=(topics||[]).map(t=>`<div class="li">${t}</div>`).join('')||'<div class="li">none</div>';
+  e.target.textContent='🔥 Hot topics'; L.querySelectorAll('.li').forEach(li=>li.onclick=()=>{$('#g-topic').value=li.textContent; L.style.display='none';}); };
 </script>
 </body></html>

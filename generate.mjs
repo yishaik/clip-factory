@@ -40,12 +40,15 @@ const RECENTF = join(ROOT, '.gen-recent.json')
 const recentTopics = () => { try { return JSON.parse(readFileSync(RECENTF, 'utf8')) } catch { return [] } }
 const rememberTopic = (t) => { const r = recentTopics(); r.push(t); writeFileSync(RECENTF, JSON.stringify(r.slice(-12))) }
 
+const LANGS = { en: 'English', he: 'Hebrew', es: 'Spanish', ar: 'Arabic', fr: 'French' }
 async function script(topics) {
   const custom = (process.env.GEN_TOPIC || '').trim()
+  const lang = LANGS[process.env.GEN_LANG || 'en'] || 'English'
   const avoid = recentTopics()
   const prompt = `You are a top short-form video writer. ${custom ? `Make a 35-45s vertical video about: "${custom}".` : topics.length ? `From these LIVE trending topics pick the ONE with the best story for a 35-45s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${!custom && avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
+Write "topic", "hook" and "script" in ${lang}. Keep the "scenes" image prompts in ENGLISH (for the image model).
 Return ONLY JSON:
-{"topic":"...","hook":"<4-7 word punchy on-screen title>","script":"<narration: 6-9 short punchy sentences, ~110-150 words, conversational, killer first line, ends thought-provoking. No emojis/hashtags/stage-directions>","scenes":["<image prompt 1>","<image prompt 2>","...5-6 cinematic photo prompts that visually follow the script beat by beat; each a vivid, specific, photorealistic vertical scene (no text, no logos)"]}`
+{"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}: 6-9 short punchy sentences, ~110-150 words, conversational, killer first line, ends thought-provoking. No emojis/hashtags/stage-directions>","scenes":["<English image prompt 1>","<English image prompt 2>","...5-6 cinematic photo prompts that visually follow the script beat by beat; each a vivid, specific, photorealistic vertical scene (no text, no logos)"]}`
   return JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
 }
 
@@ -114,6 +117,7 @@ async function main() {
   console.error('neural voiceover (Gemini TTS)...'); await tts(s.script, wav, work)
   const dur = await probeDur(wav); console.error(`voice ${dur.toFixed(1)}s`)
 
+  if (process.env.GEN_LANG && process.env.GEN_LANG !== 'en') process.env.WHISPER_LANG = process.env.GEN_LANG
   console.error('captions (Whisper)...'); const { words } = await transcribe(wav, work)
   const assPath = join(work, 'gen.ass'); writeFileSync(assPath, genAss(words, dur, s.hook))
 
