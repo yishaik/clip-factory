@@ -88,6 +88,42 @@ export async function searchYouTube(query, limit = 8) {
 
 const loadSearches = () => { const f = join(ROOT, 'searches.json'); return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : [] }
 
+const ytId = (url) => (url || '').match(/[?&]v=([\w-]{11})/)?.[1] || (url || '').match(/youtu\.be\/([\w-]{11})/)?.[1] || null
+
+// scrape a YouTube watch page for views/date/channel/length/title (no API key) — used to enrich
+// videos discovered elsewhere (e.g. Hacker News) into the same dated, velocity-rankable shape.
+async function youtubeMeta(id) {
+  const h = await get(`https://www.youtube.com/watch?v=${id}`)
+  const published = h.match(/itemprop="datePublished" content="([^"]+)"/)?.[1] || h.match(/"publishDate":"([^"]+)"/)?.[1] || null
+  return {
+    views: Number(h.match(/"viewCount":"(\d+)"/)?.[1] || 0),
+    published: published ? published.slice(0, 10) : null,
+    channel: decode(h.match(/"author":"([^"]+)"/)?.[1] || ''),
+    len: Number(h.match(/"lengthSeconds":"(\d+)"/)?.[1] || 0),
+    title: decode(h.match(/<title>([^<]+)<\/title>/)?.[1] || '').replace(/ - YouTube$/, ''),
+  }
+}
+
+// Hacker News: surfaces videos its tech/startup crowd is upvoting — creators outside our channel list.
+// HN gives only a link + points, so we take the top-by-points youtube links and enrich each with YT meta.
+export async function searchHackerNews(limit = 12) {
+  const j = JSON.parse(await get('https://hn.algolia.com/api/v1/search_by_date?tags=story&query=youtube&hitsPerPage=60'))
+  const seen = new Set(), picks = []
+  for (const h of (j.hits || [])) {
+    const id = ytId(h.url)
+    if (id && !seen.has(id)) { seen.add(id); picks.push({ id, hnPoints: h.points || 0, hnTitle: h.title }) }
+  }
+  picks.sort((a, b) => b.hnPoints - a.hnPoints)
+  const out = await Promise.all(picks.slice(0, limit).map(async (p) => {
+    try {
+      const m = await youtubeMeta(p.id)
+      if (!m.views) return null
+      return { id: p.id, title: m.title || p.hnTitle, views: m.views, published: m.published, channel: m.channel || 'HN', channelId: 'hn:' + (m.channel || p.id), len: m.len, via: 'hn', hnPoints: p.hnPoints, url: `https://www.youtube.com/watch?v=${p.id}` }
+    } catch { return null }
+  }))
+  return out.filter(Boolean)
+}
+
 // keep one channel from flooding the head: each channel contributes its best `cap` first, overflow follows.
 function diversify(sorted, cap) {
   const count = new Map(), head = [], tail = []
@@ -127,6 +163,18 @@ export async function discover(sources, { days = DAYS, skipSeen = false, queries
       console.error(`  search "${q}" -> ${vids.length} (${added} new)`)
     } catch (e) { console.error(`  ! search "${q}": ${e.message}`) }
   }))
+  // provider 3: Hacker News (videos its tech/startup crowd is upvoting) — opt-out with SOURCE_HN=0
+  if (process.env.SOURCE_HN !== '0') {
+    try {
+      const vids = await searchHackerNews(Number(process.env.SOURCE_HN_N || 12))
+      let added = 0
+      for (const v of vids) {            // no publish-age cutoff: HN recency is the signal, not video age
+        if (seen.has(v.id)) continue
+        v.score = scoreVideo(v); found.push(v); added++
+      }
+      console.error(`  hacker-news -> ${vids.length} videos (${added} new)`)
+    } catch (e) { console.error(`  ! hacker-news: ${e.message}`) }
+  }
   // a video can surface from several providers -> keep the highest-scoring copy
   const byId = new Map()
   for (const v of found) { const e = byId.get(v.id); if (!e || v.score > e.score) byId.set(v.id, v) }
