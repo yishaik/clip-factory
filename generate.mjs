@@ -93,19 +93,35 @@ async function image(prompt, png, style = '') {
   writeFileSync(png, Buffer.from(data, 'base64')); return true
 }
 
-// lower-third karaoke captions (over imagery) + a hook title card up top
-function genAss(words, dur, hook) {
+// distribute the KNOWN-correct words across Whisper's timing (Whisper is only a timing reference — its
+// transcribed TEXT is unreliable, esp. in Hebrew). Maps true word i to the proportional Whisper word,
+// keeping times monotonic, so captions show exactly what was said with roughly-synced highlighting.
+export function alignToTiming(trueWords, wWords) {
+  if (!wWords.length) return trueWords.map((t, i) => ({ start: i * 0.4, end: i * 0.4 + 0.38, text: t }))
+  const m = wWords.length, n = trueWords.length; let last = 0
+  return trueWords.map((text, i) => {
+    const w = wWords[Math.min(m - 1, Math.floor((i + 0.5) * m / n))]
+    const start = Math.max(last, w.start), end = Math.max(start + 0.18, w.end)
+    last = end
+    return { start, end, text }
+  })
+}
+
+// lower-third karaoke captions (over imagery) + a hook title card up top. rtl => Hebrew/Arabic handling.
+export function genAss(words, dur, hook, rtl = false) {
   const aT = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = (s % 60); return `${h}:${String(m).padStart(2, '0')}:${x.toFixed(2).padStart(5, '0')}` }
   const esc = (t) => String(t).replace(/[{}\\]/g, '').replace(/\n/g, ' ')
+  const RLM = '‏'                                  // force RTL base direction so words/punctuation order correctly
+  const KTAG = rtl ? 'k' : 'kf'                          // \k = instant highlight (no LTR fill sweep); \kf = smooth fill
   const W = words.map((w) => ({ start: w.start, end: Math.max(w.start + 0.1, w.end), text: esc(w.text) }))
   const lines = []; let cur = []
   for (const w of W) { cur.push(w); const d = w.end - cur[0].start; if (cur.length >= 3 || d >= 1.3 || /[.!?]$/.test(w.text)) { lines.push(cur); cur = [] } }
   if (cur.length) lines.push(cur)
-  let ev = hook ? `Dialogue: 0,0:00:00.00,${aT(Math.min(3.2, dur))},Hook,,0,0,0,,${esc(hook)}\n` : ''
+  let ev = hook ? `Dialogue: 0,0:00:00.00,${aT(Math.min(3.2, dur))},Hook,,0,0,0,,${rtl ? RLM : ''}${esc(hook)}\n` : ''
   for (const ln of lines) {
     const start = ln[0].start, end = ln[ln.length - 1].end; let text = ''
-    ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; text += `{\\kf${Math.max(1, Math.round((next - w.start) * 100))}}${w.text} ` })
-    ev += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${text.trim()}\n`
+    ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; text += `{\\${KTAG}${Math.max(1, Math.round((next - w.start) * 100))}}${w.text} ` })
+    ev += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${rtl ? RLM : ''}${text.trim()}\n`
   }
   return `[Script Info]
 ScriptType: v4.00+
@@ -138,10 +154,13 @@ async function main() {
   console.error('neural voiceover (Gemini TTS)...'); await tts(s.script, wav, work)
   const dur = await probeDur(wav); console.error(`voice ${dur.toFixed(1)}s`)
 
-  if (process.env.GEN_LANG && process.env.GEN_LANG !== 'en') process.env.WHISPER_LANG = process.env.GEN_LANG
-  try { rmSync(join(work, 'voice.json'), { force: true }) } catch {} // never reuse a previous run's transcript
-  console.error('captions (Whisper)...'); const { words } = await transcribe(wav, work)
-  const assPath = join(work, 'gen.ass'); writeFileSync(assPath, genAss(words, dur, s.hook))
+  const lang = process.env.GEN_LANG || 'en', rtl = lang === 'he' || lang === 'ar'
+  if (lang !== 'en') process.env.WHISPER_LANG = lang
+  try { rmSync(join(work, 'voice.json'), { force: true }); rmSync(join(work, 'transcript.json'), { force: true }) } catch {} // never reuse a previous run's transcript
+  // Whisper gives the TIMING; the caption TEXT comes from the known script (Whisper mis-hears Hebrew badly)
+  console.error('captions (Whisper timing + true script text)...'); const { words } = await transcribe(wav, work)
+  const capWords = alignToTiming(s.script.trim().split(/\s+/).filter(Boolean), words)
+  const assPath = join(work, 'gen.ass'); writeFileSync(assPath, genAss(capWords, dur, s.hook, rtl))
 
   console.error(`generating visuals (Imagen)...  style: ${s.style || '(default)'}`)
   const scenes = (s.scenes && s.scenes.length ? s.scenes : [s.topic]).slice(0, 6)
@@ -208,4 +227,5 @@ async function main() {
   console.error(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${imgs.length} visuals · ${dur.toFixed(0)}s`)
   console.log(JSON.stringify({ outDir: OUT, topic: s.topic, script: s.script, clips: [{ file: out, hook: s.hook, dur: +dur.toFixed(0) }] }))
 }
-main().catch((e) => { console.error('ERR ' + e.message); process.exit(1) })
+const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/generate.mjs')
+if (isMain) main().catch((e) => { console.error('ERR ' + e.message); process.exit(1) })
