@@ -3,7 +3,7 @@
 //  1) Google Trends hot topic  2) Gemini 3.1 Pro: pick topic + script + hook + per-scene image prompts
 //  3) Gemini neural TTS voiceover  4) Imagen 9:16 visuals (Ken-Burns slideshow)
 //  5) Whisper word timestamps -> karaoke captions  6) ffmpeg -> 1080x1920 mp4
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -128,26 +128,61 @@ async function main() {
   for (let i = 0; i < scenes.length; i++) { const png = join(work, `img${i}.png`); if (await image(scenes[i], png)) { imgs.push(png); console.error(`  img ${i + 1}/${scenes.length} ok`) } }
   if (!imgs.length) throw new Error('no images generated')
 
-  console.error('Ken-Burns slideshow...')
-  const T = dur / imgs.length, FPS = 30, segs = []
-  for (let i = 0; i < imgs.length; i++) {
+  console.error('Ken-Burns slideshow (varied motion + crossfades)...')
+  const FPS = 30, N = imgs.length
+  const XF = Math.min(Number(process.env.GEN_XFADE || 0.6), 1.2) // crossfade seconds between scenes
+  // each segment is longer by the overlap so the crossfaded total still equals the voiceover length
+  const segDur = (dur + (N - 1) * XF) / N
+  const frames = Math.max(1, Math.round(segDur * FPS))
+  // cycle distinct camera moves so consecutive scenes don't feel static/identical (z over a 1.25x oversample)
+  const moves = [
+    `zoompan=z='min(zoom+0.0011,1.18)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'`,         // push in, centre
+    `zoompan=z='1.14':x='(iw-iw/zoom)*on/${frames}':y='ih/2-(ih/zoom/2)'`,                   // pan right
+    `zoompan=z='1.14':x='(iw-iw/zoom)*(1-on/${frames})':y='ih/2-(ih/zoom/2)'`,               // pan left
+    `zoompan=z='min(zoom+0.0011,1.18)':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/${frames}'`,  // push in + tilt down
+    `zoompan=z='1.14':x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*(1-on/${frames})'`,               // tilt up
+  ]
+  const segs = []
+  for (let i = 0; i < N; i++) {
     const seg = join(work, `seg${i}.mp4`); segs.push(seg)
-    // -framerate on the looped input gives T*FPS input frames; zoompan d=1 => one zoom step per frame (no blow-up)
-    const zexpr = `zoompan=z='min(zoom+0.0009,1.12)':d=1:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=${FPS}`
-    await run('ffmpeg', ['-y', '-loop', '1', '-framerate', String(FPS), '-t', T.toFixed(2), '-i', imgs[i],
-      '-vf', `scale=1188:2112:force_original_aspect_ratio=increase,crop=1188:2112,${zexpr},format=yuv420p`,
+    const kb = `${moves[i % moves.length]}:d=1:s=1080x1920:fps=${FPS}`
+    await run('ffmpeg', ['-y', '-loop', '1', '-framerate', String(FPS), '-t', segDur.toFixed(2), '-i', imgs[i],
+      '-vf', `scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,${kb},format=yuv420p`,
       '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', seg])
   }
-  const listF = join(work, 'list.txt'); writeFileSync(listF, segs.map((p) => `file '${p.replace(/\\/g, '/')}'`).join('\n'))
-  const slideshow = join(work, 'slideshow.mp4')
-  await run('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listF, '-c', 'copy', slideshow])
 
-  console.error('final render...')
+  console.error('final render (crossfades + captions + music)...')
+  // optional background music: a track in music/ (or GEN_MUSIC), ducked under the voice via sidechain
+  const TRANS = ['fade', 'smoothleft', 'smoothright', 'slideup', 'circleopen', 'fadeblack']
+  let music = process.env.GEN_MUSIC || ''
+  const musicDir = join(ROOT, 'music')
+  if (!music && existsSync(musicDir)) { const m = readdirSync(musicDir).filter((f) => /\.(mp3|m4a|wav|ogg|aac)$/i.test(f)); if (m.length) music = join(musicDir, m[recentTopics().length % m.length]) }
+
+  const inputs = []; segs.forEach((sg) => inputs.push('-i', sg)); inputs.push('-i', wav)
+  const voiceIdx = N; let musIdx = -1
+  if (music) { inputs.push('-i', music); musIdx = N + 1 }
+  // video: chain crossfades between consecutive segments, then hook backdrop + captions
+  const parts = []; let prev = '[0:v]'
+  for (let i = 1; i < N; i++) {
+    const off = (i * (segDur - XF)).toFixed(3), lbl = `[x${i}]`
+    parts.push(`${prev}[${i}:v]xfade=transition=${TRANS[(i - 1) % TRANS.length]}:duration=${XF}:offset=${off}${lbl}`)
+    prev = lbl
+  }
+  parts.push(`${prev}drawbox=x=0:y=1230:w=1080:h=690:color=black@0.32:t=fill,ass=gen.ass[v]`)
+  // audio: voice alone, or voice + music ducked when the voice is speaking
+  let aMap = `${voiceIdx}:a`
+  if (musIdx >= 0) {
+    const vol = Number(process.env.GEN_MUSIC_VOL || 0.20)
+    parts.push(`[${musIdx}:a]aloop=loop=-1:size=2000000000,volume=${vol}[mus]`)
+    parts.push(`[mus][${voiceIdx}:a]sidechaincompress=threshold=0.05:ratio=6:attack=5:release=350[duck]`)
+    parts.push(`[${voiceIdx}:a][duck]amix=inputs=2:duration=first:normalize=0[a]`)
+    aMap = '[a]'
+  }
   const slug = (s.topic || 'short').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'short'
   const out = join(OUT, slug + '.mp4')
-  await run('ffmpeg', ['-y', '-i', slideshow, '-i', wav,
-    '-filter_complex', `[0:v]drawbox=x=0:y=1230:w=1080:h=690:color=black@0.32:t=fill,ass=gen.ass[v]`,
-    '-map', '[v]', '-map', '1:a', '-t', String(dur), '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', out], { cwd: work })
+  await run('ffmpeg', ['-y', ...inputs, '-filter_complex', parts.join(';'),
+    '-map', '[v]', '-map', aMap, '-t', String(dur), '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', out], { cwd: work })
+  if (music) console.error(`  music: ${music.replace(ROOT, '.')}`)
   writeFileSync(join(OUT, slug + '.json'), JSON.stringify({ ...s, dur, file: out }, null, 2))
   console.error(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${imgs.length} visuals · ${dur.toFixed(0)}s`)
   console.log(JSON.stringify({ outDir: OUT, topic: s.topic, script: s.script, clips: [{ file: out, hook: s.hook, dur: +dur.toFixed(0) }] }))
