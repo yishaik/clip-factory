@@ -317,14 +317,18 @@ export function buildAss(words, win, hook, brand) {
   }
   if (cur.length) lines.push(cur)
 
+  // RTL (Hebrew/Arabic) handling: \k (instant, no left-to-right fill sweep) + RLM prefix to force RTL order,
+  // so the karaoke highlight advances right-to-left. Detected from the actual caption glyphs.
+  const rtl = /[֐-׿؀-ۿ]/.test(W.map((w) => w.text).join('') + (hook || ''))
+  const KTAG = rtl ? 'k' : 'kf', RLM = '‏'
   let events = ''
   for (const ln of lines) {
     const start = ln[0].start, end = ln[ln.length - 1].end
     let text = ''
-    ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; const cs = Math.max(1, Math.round((next - w.start) * 100)); text += `{\\kf${cs}}${w.text} ` })
-    events += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${text.trim()}\n`
+    ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; const cs = Math.max(1, Math.round((next - w.start) * 100)); text += `{\\${KTAG}${cs}}${w.text} ` })
+    events += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${rtl ? RLM : ''}${text.trim()}\n`
   }
-  if (hook) events = `Dialogue: 0,0:00:00.00,${aT(Math.min(3, dur))},Hook,,0,0,0,,${assEsc(hook)}\n` + events
+  if (hook) events = `Dialogue: 0,0:00:00.00,${aT(Math.min(3, dur))},Hook,,0,0,0,,${rtl ? RLM : ''}${assEsc(hook)}\n` + events
   if (brand) events += `Dialogue: 0,0:00:00.00,${aT(dur)},Brand,,0,0,0,,${assEsc(brand)}\n`
 
   // colours are &HAABBGGRR. sung=yellow, unsung=white, dark outline.
