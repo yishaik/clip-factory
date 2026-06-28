@@ -52,6 +52,28 @@ function scoreTitle(t) {
   return s
 }
 
+const ageDays = (published) => Math.max(0.5, (Date.now() - (published ? new Date(published).getTime() : 0)) / 864e5)
+
+// clip-worthiness = how fast it's actually gaining traction (real signal), nudged by title + freshness.
+// view-velocity dominates (log-compressed so orders of magnitude separate), title/freshness break ties.
+function scoreVideo(v) {
+  const vel = (v.views || 0) / ageDays(v.published)     // views per day — "viral right now"
+  const velScore = Math.log10(vel + 1) * 10             // ~20=100/day, ~30=1k/day, ~40=10k/day
+  const fresh = Math.max(0, 7 - ageDays(v.published))   // small boost for <7d old
+  v.velocity = Math.round(vel)
+  return +(velScore + scoreTitle(v.title) + fresh).toFixed(2)
+}
+
+// keep one channel from flooding the head: each channel contributes its best `cap` first, overflow follows.
+function diversify(sorted, cap) {
+  const count = new Map(), head = [], tail = []
+  for (const v of sorted) {
+    const n = count.get(v.channelId) || 0
+    if (n < cap) { head.push(v); count.set(v.channelId, n + 1) } else tail.push(v)
+  }
+  return head.concat(tail)
+}
+
 export async function discover(sources, { days = DAYS, skipSeen = false } = {}) {
   const seen = skipSeen ? new Set() : new Set(existsSync(SEENF) ? JSON.parse(readFileSync(SEENF, 'utf8')) : [])
   const cutoff = Date.now() - days * 864e5
@@ -64,14 +86,14 @@ export async function discover(sources, { days = DAYS, skipSeen = false } = {}) 
       for (const v of vids) {
         if (seen.has(v.id)) continue
         if (v.published && new Date(v.published).getTime() < cutoff) continue
-        v.score = scoreTitle(v.title)
+        v.score = scoreVideo(v)
         found.push(v)
       }
       console.error(`  ${src} -> ${vids.length} in feed`)
     } catch (e) { console.error(`  ! ${src}: ${e.message}`) }
   }
   found.sort((a, b) => b.score - a.score || new Date(b.published) - new Date(a.published))
-  return found
+  return diversify(found, Number(process.env.SOURCE_PER_CHANNEL || 3))
 }
 
 export function markSeen(ids) {
@@ -92,5 +114,5 @@ if (isMain) {
   console.error(`discovering from ${sources.length} channels (last ${DAYS}d)...`)
   const vids = await discover(sources)
   console.log(`\n${vids.length} fresh candidate videos (ranked by clip-worthiness):\n`)
-  for (const v of vids.slice(0, 20)) console.log(`  [${v.score}] ${v.title}  — ${v.channel}\n        ${v.url}  (${(v.published || '').slice(0, 10)})`)
+  for (const v of vids.slice(0, 20)) console.log(`  [${v.score}] ${v.title}  — ${v.channel}\n        ${(v.views || 0).toLocaleString()} views · ${(v.velocity || 0).toLocaleString()}/day · ${(v.published || '').slice(0, 10)}\n        ${v.url}`)
 }
