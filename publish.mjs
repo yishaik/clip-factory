@@ -5,10 +5,24 @@
 //   gcloud auth application-default login --client-id-file=client_secret.json \
 //     --scopes=https://www.googleapis.com/auth/youtube.upload,https://www.googleapis.com/auth/youtube
 import { execFile } from 'node:child_process'
-import { statSync, createReadStream, existsSync } from 'node:fs'
+import { statSync, createReadStream, existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
+const ROOT = dirname(fileURLToPath(import.meta.url))
 const run = (cmd, args) => new Promise((res, rej) => execFile(cmd, args, { maxBuffer: 1 << 24 }, (e, so, se) => e ? rej(new Error(se || e.message)) : res(so.trim())))
-async function token() { return (await run('gcloud', ['auth', 'application-default', 'print-access-token'])).trim() }
+async function token() {
+  const f = join(ROOT, '.youtube-publish.json') // saved refresh token (preferred)
+  if (existsSync(f)) {
+    const c = JSON.parse(readFileSync(f, 'utf8'))
+    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: c.client_id, client_secret: c.client_secret, refresh_token: c.refresh_token, grant_type: 'refresh_token' }) })
+    const j = await r.json()
+    if (j.access_token) return j.access_token
+    throw new Error('token refresh failed: ' + JSON.stringify(j))
+  }
+  return (await run('gcloud', ['auth', 'application-default', 'print-access-token'])).trim() // fallback to ADC
+}
 
 export async function uploadShort(file, title, description = '', privacy = 'public') {
   if (!existsSync(file)) throw new Error('not found: ' + file)
