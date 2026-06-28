@@ -93,7 +93,7 @@ export async function discover(sources, { days = DAYS, skipSeen = false } = {}) 
     } catch (e) { console.error(`  ! ${src}: ${e.message}`) }
   }
   found.sort((a, b) => b.score - a.score || new Date(b.published) - new Date(a.published))
-  return diversify(found, Number(process.env.SOURCE_PER_CHANNEL || 3))
+  return diversify(found, Number(process.env.SOURCE_PER_CHANNEL || 2))
 }
 
 export function markSeen(ids) {
