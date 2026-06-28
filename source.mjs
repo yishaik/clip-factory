@@ -4,6 +4,7 @@
 // not bot-blocked), rank them by clip-worthiness, and emit a queue for the clip engine.
 // Channels live in sources.json (array of channel_id "UC..." OR @handle OR channel URL).
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -54,15 +55,38 @@ function scoreTitle(t) {
 
 const ageDays = (published) => Math.max(0.5, (Date.now() - (published ? new Date(published).getTime() : 0)) / 864e5)
 
-// clip-worthiness = how fast it's actually gaining traction (real signal), nudged by title + freshness.
-// view-velocity dominates (log-compressed so orders of magnitude separate), title/freshness break ties.
+// clip-worthiness, unified across providers:
+//  - RSS items have a publish date -> rank by view-VELOCITY (views/day = "viral right now").
+//  - search items have no date -> rank by absolute views (evergreen clip gold), scaled DOWN
+//    (SOURCE_EVERGREEN_W, default 4) so fresh trending generally still wins.
+// title hookiness + freshness break ties. log-compressed so orders of magnitude separate.
 function scoreVideo(v) {
-  const vel = (v.views || 0) / ageDays(v.published)     // views per day — "viral right now"
-  const velScore = Math.log10(vel + 1) * 10             // ~20=100/day, ~30=1k/day, ~40=10k/day
-  const fresh = Math.max(0, 7 - ageDays(v.published))   // small boost for <7d old
-  v.velocity = Math.round(vel)
-  return +(velScore + scoreTitle(v.title) + fresh).toFixed(2)
+  const title = scoreTitle(v.title)
+  if (v.published) {
+    const vel = (v.views || 0) / ageDays(v.published)
+    v.velocity = Math.round(vel)
+    return +(Math.log10(vel + 1) * 10 + title + Math.max(0, 7 - ageDays(v.published))).toFixed(2)
+  }
+  const ev = Math.log10((v.views || 0) + 1) * Number(process.env.SOURCE_EVERGREEN_W || 4)
+  return +(ev + title).toFixed(2)
 }
+
+// free YouTube keyword search via yt-dlp (no API key, not blocked). Flat = id+title+views+channel
+// (no publish date), which is fine: search surfaces evergreen popular videos from creators we DON'T
+// follow -> diversity beyond the fixed channel list.
+export async function searchYouTube(query, limit = 8) {
+  const out = await new Promise((res) => execFile('python',
+    ['-m', 'yt_dlp', '--flat-playlist', '--no-warnings', '--print', '%(id)s\t%(title)s\t%(view_count)s\t%(channel)s', `ytsearch${limit}:${query}`],
+    { maxBuffer: 1 << 26 }, (e, so) => res(so || '')))
+  const vids = []
+  for (const line of out.split('\n')) {
+    const [id, title, views, channel] = line.split('\t')
+    if (id && /^[\w-]{11}$/.test(id)) vids.push({ id, title: title || '', views: Number(views) || 0, channel: channel || '', channelId: 'search:' + (channel || query), via: 'search', query, url: `https://www.youtube.com/watch?v=${id}` })
+  }
+  return vids
+}
+
+const loadSearches = () => { const f = join(ROOT, 'searches.json'); return existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : [] }
 
 // keep one channel from flooding the head: each channel contributes its best `cap` first, overflow follows.
 function diversify(sorted, cap) {
@@ -74,10 +98,11 @@ function diversify(sorted, cap) {
   return head.concat(tail)
 }
 
-export async function discover(sources, { days = DAYS, skipSeen = false } = {}) {
+export async function discover(sources, { days = DAYS, skipSeen = false, queries } = {}) {
   const seen = skipSeen ? new Set() : new Set(existsSync(SEENF) ? JSON.parse(readFileSync(SEENF, 'utf8')) : [])
   const cutoff = Date.now() - days * 864e5
   const found = []
+  // provider 1: per-channel RSS (fresh, dated -> velocity-ranked)
   for (const src of sources) {
     try {
       const cid = await resolveChannelId(src)
@@ -86,14 +111,27 @@ export async function discover(sources, { days = DAYS, skipSeen = false } = {}) 
       for (const v of vids) {
         if (seen.has(v.id)) continue
         if (v.published && new Date(v.published).getTime() < cutoff) continue
-        v.score = scoreVideo(v)
+        v.via = 'rss'; v.score = scoreVideo(v)
         found.push(v)
       }
       console.error(`  ${src} -> ${vids.length} in feed`)
     } catch (e) { console.error(`  ! ${src}: ${e.message}`) }
   }
-  found.sort((a, b) => b.score - a.score || new Date(b.published) - new Date(a.published))
-  return diversify(found, Number(process.env.SOURCE_PER_CHANNEL || 2))
+  // provider 2: YouTube keyword search (topics in searches.json or passed in) -> creators we don't follow
+  const qs = queries || loadSearches()
+  await Promise.all(qs.map(async (q) => {
+    try {
+      const vids = await searchYouTube(q, Number(process.env.SOURCE_SEARCH_N || 8))
+      let added = 0
+      for (const v of vids) { if (seen.has(v.id)) continue; v.score = scoreVideo(v); found.push(v); added++ }
+      console.error(`  search "${q}" -> ${vids.length} (${added} new)`)
+    } catch (e) { console.error(`  ! search "${q}": ${e.message}`) }
+  }))
+  // a video can surface from several providers -> keep the highest-scoring copy
+  const byId = new Map()
+  for (const v of found) { const e = byId.get(v.id); if (!e || v.score > e.score) byId.set(v.id, v) }
+  const merged = [...byId.values()].sort((a, b) => b.score - a.score || (new Date(b.published || 0) - new Date(a.published || 0)))
+  return diversify(merged, Number(process.env.SOURCE_PER_CHANNEL || 2))
 }
 
 export function markSeen(ids) {
@@ -114,5 +152,5 @@ if (isMain) {
   console.error(`discovering from ${sources.length} channels (last ${DAYS}d)...`)
   const vids = await discover(sources)
   console.log(`\n${vids.length} fresh candidate videos (ranked by clip-worthiness):\n`)
-  for (const v of vids.slice(0, 20)) console.log(`  [${v.score}] ${v.title}  — ${v.channel}\n        ${(v.views || 0).toLocaleString()} views · ${(v.velocity || 0).toLocaleString()}/day · ${(v.published || '').slice(0, 10)}\n        ${v.url}`)
+  for (const v of vids.slice(0, 20)) console.log(`  [${v.score}] (${v.via}) ${v.title}  — ${v.channel}\n        ${(v.views || 0).toLocaleString()} views${v.velocity ? ' · ' + v.velocity.toLocaleString() + '/day' : ''}${v.published ? ' · ' + v.published.slice(0, 10) : ' · evergreen'}\n        ${v.url}`)
 }
