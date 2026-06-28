@@ -13,6 +13,7 @@ video, start, dur = sys.argv[1], float(sys.argv[2]), float(sys.argv[3])
 cap = cv2.VideoCapture(video)
 cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 xs, ys, sizes, tops, bots = [], [], [], [], []   # face centre x/y, height frac, and top/bottom edges
+graphic_frames = 0                                # frames with busy graphics in the would-be-cropped sides
 samples = 0
 t, step = start, 0.5
 while t < start + dur:
@@ -26,6 +27,13 @@ while t < start + dur:
     sh = max(1, int(h * sw / w))
     small = cv2.resize(frame, (sw, sh))
     gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    # detect an on-screen graphic (chart/text) in the left+right thirds a centre crop would discard:
+    # such content has far higher edge density than a plain/bokeh studio background.
+    edges = cv2.Canny(gray, 80, 200)
+    sidepx = edges[:, :int(0.33 * sw)], edges[:, int(0.67 * sw):]
+    side_density = (int(np.count_nonzero(sidepx[0])) + int(np.count_nonzero(sidepx[1]))) / (sidepx[0].size + sidepx[1].size)
+    if side_density > 0.04:   # calibrated @480px: charts/text 5-8%, plain talking-head sides 0.6-3%
+        graphic_frames += 1
     faces = cascade.detectMultiScale(gray, 1.1, 5, minSize=(36, 36))
     if len(faces):
         fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])  # the largest (closest) face
@@ -38,6 +46,7 @@ while t < start + dur:
 cap.release()
 
 frac = round(len(xs) / samples, 3) if samples else 0.0
+graphic = round(graphic_frames / samples, 3) if samples else 0.0
 if len(xs) >= 3:
     ax = np.array(xs)
     # robust percentiles so a stray detection doesn't blow up the vertical extent; ylo/yhi bracket the
@@ -45,6 +54,6 @@ if len(xs) >= 3:
     print(json.dumps({"x": round(float(np.median(ax)), 4), "y": round(float(np.median(ys)), 4),
                       "size": round(float(np.median(sizes)), 4),
                       "ylo": round(float(np.percentile(tops, 5)), 4), "yhi": round(float(np.percentile(bots, 95)), 4),
-                      "conf": len(xs), "frac": frac, "std": round(float(np.std(ax)), 4)}))
+                      "conf": len(xs), "frac": frac, "graphic": graphic, "std": round(float(np.std(ax)), 4)}))
 else:
-    print(json.dumps({"x": 0.5, "y": 0.42, "size": 0.0, "ylo": 0.15, "yhi": 0.7, "conf": len(xs), "frac": frac, "std": 1.0}))
+    print(json.dumps({"x": 0.5, "y": 0.42, "size": 0.0, "ylo": 0.15, "yhi": 0.7, "conf": len(xs), "frac": frac, "graphic": graphic, "std": 1.0}))

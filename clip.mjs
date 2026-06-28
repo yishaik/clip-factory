@@ -382,6 +382,9 @@ async function renderClip(input, win, idx, outDir, workDir, words) {
     // Haar is a sparse detector — even a clear talking head only registers a face in ~30-45% of frames,
     // while B-roll sits near 0. Gate low so real speakers crop and only true B-roll falls back to blur.
     mode = (fi.frac >= 0.15 && fi.conf >= 5) ? 'crop' : 'blur'
+    // but if a meaningful slice of the clip shows an on-screen graphic (chart/text) in the sides a crop
+    // would discard, fall back to blur-fit so the whole composition stays visible instead of being sliced.
+    if (mode === 'crop' && (fi.graphic || 0) >= Number(process.env.CLIP_GRAPHIC_FRAC || 0.15)) mode = 'blur'
   }
   let vf, note = mode
   if (mode === 'blur') vf = blurVf(assArg)
