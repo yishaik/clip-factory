@@ -24,3 +24,8 @@ client_secret*.json
 .youtube-publish.json
 .published.json
 _frames/
+music/*.mp3
+music/*.m4a
+music/*.wav
+music/*.ogg
+music/*.aac

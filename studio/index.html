@@ -84,6 +84,12 @@
         <div><label>Language</label><select id="g-lang"><option value="en">English</option><option value="he">Hebrew</option><option value="es">Spanish</option><option value="ar">Arabic</option><option value="fr">French</option></select></div>
         <div><label>Voice</label><select id="g-voice"><option>Charon</option><option>Puck</option><option>Kore</option><option>Aoede</option><option>Fenrir</option></select></div>
       </div>
+      <div class="row">
+        <div><label>🎵 Music</label><select id="g-music"><option value="none">None</option><option value="ai">AI-generate (matches mood)</option><option value="library">Library track</option></select></div>
+        <div><label>Volume <span id="g-musvol-v" style="color:var(--mut)">0.20</span></label><input id="g-musvol" type="range" min="0" max="0.5" step="0.02" value="0.2" style="width:100%"></div>
+      </div>
+      <div id="g-music-ai" style="display:none;margin-top:8px"><label>Music style <span style="color:var(--mut)">(optional — auto from mood)</span></label><input id="g-musprompt" placeholder="e.g. lofi chill beats · soft cinematic piano · upbeat corporate"/></div>
+      <div id="g-music-lib" style="display:none;margin-top:8px"><label>Track</label><div class="row" style="align-items:center;gap:8px"><select id="g-mustrack" style="flex:1"><option value="">— no tracks in music/ —</option></select><span class="pill" id="g-musupload">⬆ upload</span></div><input id="g-musfile" type="file" accept="audio/*" style="display:none"></div>
       <button class="go" id="g-go">✨  Generate video</button>
       <p class="hint">AI script + neural voice + AI visuals · ~3–4 min.</p>
     </div>
@@ -150,7 +156,15 @@ async function start(btn, url, body){
   poll(j.id, btn);
 }
 $('#c-go').onclick=()=>{ const url=$('#c-url').value.trim(); if(!url)return alert('Paste a YouTube link first'); start($('#c-go'),'/api/clip',{url,n:+$('#c-n').value,frame:$('#c-frame').value,head:+$('#c-head').value,lang:$('#c-lang').value}); };
-$('#g-go').onclick=()=>start($('#g-go'),'/api/generate',{topic:$('#g-topic').value.trim(),voice:$('#g-voice').value,lang:$('#g-lang').value});
+$('#g-go').onclick=()=>start($('#g-go'),'/api/generate',{topic:$('#g-topic').value.trim(),voice:$('#g-voice').value,lang:$('#g-lang').value,music:$('#g-music').value,musvol:$('#g-musvol').value,musprompt:$('#g-musprompt').value.trim(),mustrack:$('#g-mustrack').value});
+// --- music controls ---
+let musicAiReady=false;
+$('#g-musvol').oninput=()=>$('#g-musvol-v').textContent=(+$('#g-musvol').value).toFixed(2);
+async function loadTracks(){ try{ const j=await (await fetch(wt('/api/music'))).json(); musicAiReady=j.aiReady; const sel=$('#g-mustrack'); sel.innerHTML = (j.tracks||[]).length? j.tracks.map(t=>`<option value="${t.path.replace(/"/g,'&quot;')}">${t.name}</option>`).join('') : '<option value="">— no tracks · upload one —</option>'; const ai=$('#g-music').querySelector('option[value=ai]'); ai.textContent= j.aiReady?'AI-generate (matches mood)':'AI-generate (needs Replicate token)'; ai.disabled=!j.aiReady; }catch{} }
+$('#g-music').onchange=()=>{ const m=$('#g-music').value; $('#g-music-ai').style.display=m==='ai'?'block':'none'; $('#g-music-lib').style.display=m==='library'?'block':'none'; if(m==='library')loadTracks(); LS.setItem('cf_g-music',m); };
+$('#g-musupload').onclick=()=>$('#g-musfile').click();
+$('#g-musfile').onchange=async()=>{ const f=$('#g-musfile').files[0]; if(!f)return; const up=$('#g-musupload'); up.textContent='⏳ uploading…'; try{ const r=await (await fetch(wt('/api/music-upload?name='+encodeURIComponent(f.name)),{method:'POST',headers:{'content-type':'application/octet-stream'},body:f})).json(); if(r.error)alert(r.error); else{ await loadTracks(); $('#g-mustrack').value=r.path; } }catch{ alert('upload failed'); } up.textContent='⬆ upload'; };
+loadTracks();
 $('#c-disc').onclick=async e=>{ const L=$('#c-list'); if(L.style.display==='block'){L.style.display='none';return;} e.target.textContent='loading…';
   const {vids}=await (await fetch(wt('/api/discover'))).json(); L.style.display='block';
   L.innerHTML=(vids||[]).map(v=>`<div class="li" data-u="${v.url}"><b>[${v.score}]</b> ${v.title} <span style="color:var(--mut)">— ${v.channel}</span></div>`).join('')||'<div class="li">none found</div>';

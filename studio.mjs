@@ -4,10 +4,11 @@
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { createReadStream, statSync, existsSync, readFileSync } from 'node:fs'
+import { createReadStream, statSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { discover } from './source.mjs'
+import { listLibrary } from './music.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 try { // .env loader (GEMINI_API_KEY etc.)
@@ -74,8 +75,22 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { id: startJob('clip', ['clipone.mjs', url, String(n)], { CLIP_FRAME: frame, PIPE_HEAD: String(head), WHISPER_LANG: lang }) })
     }
     if (req.method === 'POST' && p === '/api/generate') {
-      const { topic = '', voice = 'Charon', lang = 'en' } = await body(req)
-      return json(res, 200, { id: startJob('generate', ['generate.mjs'], { GEN_TOPIC: topic, GEN_VOICE: voice, GEN_LANG: lang }) })
+      const { topic = '', voice = 'Charon', lang = 'en', music = '', musvol = '', musprompt = '', mustrack = '' } = await body(req)
+      const env = { GEN_TOPIC: topic, GEN_VOICE: voice, GEN_LANG: lang }
+      if (music && music !== 'none') env.GEN_MUSIC_MODE = music
+      if (musvol) env.GEN_MUSIC_VOL = String(musvol)
+      if (musprompt) env.GEN_MUSIC_PROMPT = musprompt
+      if (mustrack && norm(mustrack).startsWith(norm(join(ROOT, 'music'))) && /\.(mp3|m4a|wav|ogg|aac)$/i.test(mustrack)) env.GEN_MUSIC = mustrack // explicit library track
+      return json(res, 200, { id: startJob('generate', ['generate.mjs'], env) })
+    }
+    if (req.method === 'GET' && p === '/api/music') {
+      return json(res, 200, { tracks: listLibrary().map((f) => ({ name: f.split(/[\\/]/).pop(), path: f })), aiReady: !!process.env.REPLICATE_API_TOKEN })
+    }
+    if (req.method === 'POST' && p === '/api/music-upload') {
+      const name = (u.searchParams.get('name') || 'track').replace(/[^A-Za-z0-9._-]/g, '_')
+      if (!/\.(mp3|m4a|wav|ogg|aac)$/i.test(name)) return json(res, 400, { error: 'audio files only (mp3/m4a/wav/ogg/aac)' })
+      const chunks = []; req.on('data', (c) => chunks.push(c)); req.on('end', () => { try { const d = join(ROOT, 'music'); mkdirSync(d, { recursive: true }); writeFileSync(join(d, name), Buffer.concat(chunks)); json(res, 200, { ok: true, name, path: join(d, name) }) } catch (e) { json(res, 500, { error: String(e.message) }) } })
+      return
     }
     if (req.method === 'POST' && p === '/api/publish') {
       const { file = '', title = 'Short', privacy = 'unlisted' } = await body(req)

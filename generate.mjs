@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { transcribe, emitCaptionLines } from './clip.mjs'
+import { resolveMusic, listLibrary } from './music.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 try {
@@ -53,7 +54,7 @@ async function script(topics) {
 Write "topic", "hook" and "script" in ${lang}. Keep "style" and the "scenes" image prompts in ENGLISH (for the image model).
 LENGTH IS CRITICAL: the script must be ~${words} words (HARD ceiling ${words + 12}) — it will be read aloud and must land near ${secs}s. Be ruthless: a killer first line, then ${sents}-${sents + 1} SHORT punchy sentences, cut every filler word, no throat-clearing, end on a thought-provoking line. Tight beats > completeness.
 Return ONLY JSON:
-{"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}, ~${words} words, conversational, fast-paced. No emojis/hashtags/stage-directions>","style":"<ONE art-direction line applied to EVERY scene for a cohesive look: a specific palette + lighting + film/lens look, e.g. 'moody teal-and-amber, low-key dramatic lighting, shallow depth of field, 35mm film grain, cinematic'>","scenes":["<English image prompt 1>","...${nScenes} photo prompts that follow the script beat by beat. Each: a vivid, specific subject AND an explicit shot type — VARY them across scenes (wide establishing, medium, tight close-up, detail/insert, low-angle) for visual rhythm. Describe ONLY subject+composition (the shared 'style' supplies palette/lighting). CRITICAL: every scene must be visually COMPATIBLE with the chosen style — same mood, time-of-day and palette feasibility; do NOT pick subjects that fight it (e.g. if the style is dark/low-key, avoid bright daylight or snow-white scenes — choose subjects that can plausibly carry that palette). photorealistic, vertical 9:16, no text, no logos."]}`
+{"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}, ~${words} words, conversational, fast-paced. No emojis/hashtags/stage-directions>","style":"<ONE art-direction line applied to EVERY scene for a cohesive look: a specific palette + lighting + film/lens look, e.g. 'moody teal-and-amber, low-key dramatic lighting, shallow depth of field, 35mm film grain, cinematic'>","music":"<short instrumental background-music brief matching the mood: genre + instruments + tempo, e.g. 'soft cinematic ambient, warm piano and strings, slow, hopeful' — no vocals>","scenes":["<English image prompt 1>","...${nScenes} photo prompts that follow the script beat by beat. Each: a vivid, specific subject AND an explicit shot type — VARY them across scenes (wide establishing, medium, tight close-up, detail/insert, low-angle) for visual rhythm. Describe ONLY subject+composition (the shared 'style' supplies palette/lighting). CRITICAL: every scene must be visually COMPATIBLE with the chosen style — same mood, time-of-day and palette feasibility; do NOT pick subjects that fight it (e.g. if the style is dark/low-key, avoid bright daylight or snow-white scenes — choose subjects that can plausibly carry that palette). photorealistic, vertical 9:16, no text, no logos."]}`
   const out = JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
   out._maxWords = words + 12
   return out
@@ -186,12 +187,20 @@ async function main() {
       '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', seg])
   }
 
-  console.error('final render (crossfades + captions + music)...')
-  // optional background music: a track in music/ (or GEN_MUSIC), ducked under the voice via sidechain
+  // optional background music (ducked under the voice). GEN_MUSIC=explicit path wins; else GEN_MUSIC_MODE:
+  //   none | library (a track from music/) | ai (Replicate MusicGen, prompt = GEN_MUSIC_PROMPT or the LLM's mood)
   const TRANS = ['fade', 'smoothleft', 'smoothright', 'slideup', 'circleopen', 'fadeblack']
   let music = process.env.GEN_MUSIC || ''
-  const musicDir = join(ROOT, 'music')
-  if (!music && existsSync(musicDir)) { const m = readdirSync(musicDir).filter((f) => /\.(mp3|m4a|wav|ogg|aac)$/i.test(f)); if (m.length) music = join(musicDir, m[recentTopics().length % m.length]) }
+  if (!music) {
+    const mode = process.env.GEN_MUSIC_MODE || (listLibrary().length ? 'library' : 'none')
+    if (mode !== 'none') {
+      const aiPrompt = process.env.GEN_MUSIC_PROMPT || s.music || ''
+      if (mode === 'ai') console.error(`AI music (Replicate MusicGen): "${aiPrompt}"...`)
+      try { music = await resolveMusic({ mode, aiPrompt, seconds: Math.min(30, Math.round(dur)), outPath: join(work, 'ai_music.mp3') }) }
+      catch (e) { console.error('  music skipped: ' + e.message) }
+    }
+  }
+  console.error('final render (crossfades + captions' + (music ? ' + music' : '') + ')...')
 
   const inputs = []; segs.forEach((sg) => inputs.push('-i', sg)); inputs.push('-i', wav)
   const voiceIdx = N; let musIdx = -1
