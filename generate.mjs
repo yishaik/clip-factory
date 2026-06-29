@@ -31,9 +31,13 @@ async function hotTopics() {
 }
 
 async function gemini(prompt, { json = false, model = process.env.GEN_MODEL || 'gemini-3.1-pro-preview' } = {}) {
-  const gc = { temperature: 0.85, maxOutputTokens: 4096 }; if (json) gc.responseMimeType = 'application/json'
+  // 3.1-pro thinks by default and thinking tokens count toward the output budget — bound the thinking and
+  // give a big maxOutputTokens so the JSON isn't truncated/emptied (was 4096 -> empty response -> crash).
+  const gc = { temperature: 0.85, maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: Number(process.env.GEN_THINK_BUDGET || 2048) } }
+  if (json) gc.responseMimeType = 'application/json'
   const r = await fetch(`${GAPI}/${model}:generateContent?key=${KEY}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: gc }) })
   const j = await r.json()
+  if (j.error) throw new Error(`Gemini ${model}: ${j.error.code} ${j.error.message}`) // surface API errors (e.g. project access denied) clearly
   return (j.candidates && j.candidates[0]?.content?.parts?.[0]?.text || '').trim()
 }
 
