@@ -81,17 +81,30 @@ export async function transcribe(file, workDir) {
   // cache is keyed to the EXACT input (size+mtime) — a different/changed video can never reuse a stale
   // transcript (the kind of cross-run contamination that bit us before). Also keyed to model+chunk.
   const st = (() => { try { return statSync(file) } catch { return null } })()
-  const sig = st ? `${st.size}:${Math.round(st.mtimeMs)}:${WMODEL}:${process.env.WHISPER_CHUNK_SEC ?? 150}` : ''
+  // Hebrew -> ivrit-ai fine-tune via faster-whisper (vanilla whisper mis-hears Hebrew badly, ~83% vs ~98%).
+  // WHISPER_BACKEND=cli forces the plain CLI path; WHISPER_HE_MODEL overrides the model.
+  const HE_MODEL = process.env.WHISPER_HE_MODEL || 'ivrit-ai/whisper-large-v3-turbo-ct2'
+  const useFW = (process.env.WHISPER_LANG || '') === 'he' && process.env.WHISPER_BACKEND !== 'cli'
+  const sig = st ? `${st.size}:${Math.round(st.mtimeMs)}:${useFW ? 'fw:' + HE_MODEL : WMODEL}:${process.env.WHISPER_CHUNK_SEC ?? 150}` : ''
   if (existsSync(cacheF)) { try { const c = JSON.parse(readFileSync(cacheF, 'utf8')); if (c.sig === sig && c.cues?.length) return { cues: c.cues, words: c.words } } catch {} }
   const CHUNK = Number(process.env.WHISPER_CHUNK_SEC ?? 150), OVERLAP = 1.5
   const dur = await probeDuration(file).catch(() => 0)
-  let result
+  let result = null
+  // Hebrew backend: faster-whisper handles long audio itself; on any failure we fall back to the CLI path.
+  if (useFW) {
+    const out = join(workDir, 'fw.json')
+    try {
+      console.error(`  transcribe: Hebrew via faster-whisper (${HE_MODEL})`)
+      await run('python', [join(ROOT, 'transcribe_fw.py'), file, 'he', HE_MODEL, out])
+      const r = parseWhisper(out, 0); if (r.cues.length) result = r
+    } catch (e) { console.error('  faster-whisper(he) failed -> whisper CLI: ' + String(e.message).slice(0, 100)) }
+  }
   let lang = process.env.WHISPER_LANG || '' // empty = auto-detect on the FIRST chunk, then lock it for the rest
-  if (!CHUNK || (dur && dur <= CHUNK + 5)) {
+  if (!result && (!CHUNK || (dur && dur <= CHUNK + 5))) {
     const jp = await whisperRun(file, workDir, lang)
     if (!jp) throw new Error('whisper produced no transcript (likely OOM/bad-allocation — try WHISPER_MODEL=tiny)')
     result = parseWhisper(jp, 0)
-  } else {
+  } else if (!result) {
     const allCues = [], allWords = []
     let lastEnd = 0
     for (let i = 0, start = 0; start < dur; i++, start += CHUNK) {
