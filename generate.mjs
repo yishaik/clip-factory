@@ -30,15 +30,33 @@ async function hotTopics() {
   } catch { return [] }
 }
 
+const OAI = 'https://api.openai.com/v1'
+const hasOpenAI = () => !!process.env.OPENAI_API_KEY
+// OpenAI chat fallback for text (script/hook generation) when Gemini is unavailable.
+async function openaiChat(prompt, json) {
+  const k = process.env.OPENAI_API_KEY; if (!k) return null
+  const body = { model: process.env.OPENAI_MODEL || 'gpt-4o', messages: [{ role: 'user', content: prompt }], temperature: 0.85 }
+  if (json) body.response_format = { type: 'json_object' }
+  const r = await fetch(`${OAI}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${k}`, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+  const j = await r.json(); if (j.error) throw new Error('OpenAI: ' + j.error.message)
+  return (j.choices?.[0]?.message?.content || '').trim()
+}
 async function gemini(prompt, { json = false, model = process.env.GEN_MODEL || 'gemini-3.1-pro-preview' } = {}) {
-  // 3.1-pro thinks by default and thinking tokens count toward the output budget — bound the thinking and
-  // give a big maxOutputTokens so the JSON isn't truncated/emptied (was 4096 -> empty response -> crash).
+  // 3.1-pro thinks by default and thinking counts toward output budget — bound it + big maxOutputTokens.
   const gc = { temperature: 0.85, maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: Number(process.env.GEN_THINK_BUDGET || 2048) } }
   if (json) gc.responseMimeType = 'application/json'
-  const r = await fetch(`${GAPI}/${model}:generateContent?key=${KEY}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: gc }) })
-  const j = await r.json()
-  if (j.error) throw new Error(`Gemini ${model}: ${j.error.code} ${j.error.message}`) // surface API errors (e.g. project access denied) clearly
-  return (j.candidates && j.candidates[0]?.content?.parts?.[0]?.text || '').trim()
+  try {
+    const r = await fetch(`${GAPI}/${model}:generateContent?key=${KEY}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: gc }) })
+    const j = await r.json()
+    if (j.error) throw new Error(`${j.error.code} ${j.error.message}`)
+    const t = (j.candidates && j.candidates[0]?.content?.parts?.[0]?.text || '').trim()
+    if (!t) throw new Error('empty response')
+    return t
+  } catch (e) {
+    const oa = await openaiChat(prompt, json).catch(() => null) // fall back to OpenAI when Gemini fails
+    if (oa) { console.error(`  text: Gemini failed (${String(e.message).slice(0, 50)}) → OpenAI`); return oa }
+    throw new Error(`Gemini failed (${e.message})` + (hasOpenAI() ? ' and OpenAI fallback failed' : '; set OPENAI_API_KEY for a fallback'))
+  }
 }
 
 const RECENTF = join(ROOT, '.gen-recent.json')
@@ -72,30 +90,59 @@ function fitWords(text, maxWords) {
   return kept.join(' ')
 }
 
+async function openaiTTS(text, wav, work) {
+  const k = process.env.OPENAI_API_KEY
+  const r = await fetch(`${OAI}/audio/speech`, { method: 'POST', headers: { authorization: `Bearer ${k}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: process.env.OPENAI_TTS_MODEL || 'tts-1-hd', voice: process.env.OPENAI_VOICE || 'onyx', input: text, response_format: 'wav' }) })
+  if (!r.ok) throw new Error('OpenAI TTS: ' + (await r.text()).slice(0, 120))
+  const tmp = join(work, 'oai_tts.wav'); writeFileSync(tmp, Buffer.from(await r.arrayBuffer()))
+  await run('ffmpeg', ['-y', '-i', tmp, '-ar', '24000', '-ac', '1', wav]) // normalise to 24k mono like the Gemini path
+}
 async function tts(text, wav, work) {
-  const r = await fetch(`${GAPI}/gemini-2.5-flash-preview-tts:generateContent?key=${KEY}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: `Read this as an engaging, natural storyteller — clear, warm, well-paced:\n${text}` }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: process.env.GEN_VOICE || 'Charon' } } } } }),
-  })
-  const j = await r.json()
-  const data = j?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data
-  if (!data) throw new Error('TTS failed: ' + (j?.error?.message || 'no audio'))
-  const pcm = join(work, 'voice.pcm'); writeFileSync(pcm, Buffer.from(data, 'base64'))
-  await run('ffmpeg', ['-y', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcm, wav])
+  try {
+    const r = await fetch(`${GAPI}/gemini-2.5-flash-preview-tts:generateContent?key=${KEY}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ contents: [{ parts: [{ text: `Read this as an engaging, natural storyteller — clear, warm, well-paced:\n${text}` }] }], generationConfig: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: process.env.GEN_VOICE || 'Charon' } } } } }),
+    })
+    const j = await r.json()
+    const data = j?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data
+    if (!data) throw new Error(j?.error?.message || 'no audio')
+    const pcm = join(work, 'voice.pcm'); writeFileSync(pcm, Buffer.from(data, 'base64'))
+    await run('ffmpeg', ['-y', '-f', 's16le', '-ar', '24000', '-ac', '1', '-i', pcm, wav])
+  } catch (e) {
+    if (!hasOpenAI()) throw new Error('TTS failed: ' + e.message)
+    console.error(`  voice: Gemini TTS failed (${String(e.message).slice(0, 50)}) → OpenAI`)
+    await openaiTTS(text, wav, work)
+  }
 }
 
+async function openaiImage(prompt, png) {
+  const k = process.env.OPENAI_API_KEY; if (!k) return false
+  const r = await fetch(`${OAI}/images/generations`, { method: 'POST', headers: { authorization: `Bearer ${k}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model: process.env.OPENAI_IMAGE_MODEL || 'gpt-image-1', prompt: prompt.slice(0, 3800), size: '1024x1536', n: 1 }) }) // 1024x1536 portrait -> cropped to 9:16
+  const j = await r.json()
+  const b64 = j.data?.[0]?.b64_json
+  if (!b64) { console.error('  OpenAI image failed: ' + String(j.error?.message || '').slice(0, 80)); return false }
+  writeFileSync(png, Buffer.from(b64, 'base64')); return true
+}
 async function image(prompt, png, style = '') {
   const look = style || 'cinematic, photorealistic, dramatic lighting' // shared art-direction -> cohesive look across scenes
   const imgModel = process.env.GEN_IMAGE_MODEL || 'imagen-4.0-generate-001'        // standard (sharper) over -fast
-  // style FIRST so the image model weights the shared palette/lighting highly (keeps scenes cohesive)
-  const r = await fetch(`${GAPI}/${imgModel}:predict?key=${KEY}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ instances: [{ prompt: `${look}. ${prompt}. Vertical 9:16, no text, no watermark` }], parameters: { sampleCount: 1, aspectRatio: '9:16' } }),
-  })
-  const j = await r.json()
-  const data = j?.predictions?.[0]?.bytesBase64Encoded
-  if (!data) return false
-  writeFileSync(png, Buffer.from(data, 'base64')); return true
+  try {
+    // style FIRST so the image model weights the shared palette/lighting highly (keeps scenes cohesive)
+    const r = await fetch(`${GAPI}/${imgModel}:predict?key=${KEY}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instances: [{ prompt: `${look}. ${prompt}. Vertical 9:16, no text, no watermark` }], parameters: { sampleCount: 1, aspectRatio: '9:16' } }),
+    })
+    const j = await r.json()
+    if (j.error) throw new Error(j.error.message)
+    const data = j?.predictions?.[0]?.bytesBase64Encoded
+    if (!data) throw new Error('no image')
+    writeFileSync(png, Buffer.from(data, 'base64')); return true
+  } catch (e) {
+    if (!hasOpenAI()) return false
+    return await openaiImage(`${look}. ${prompt}. vertical, no text`, png) // fall back to OpenAI image
+  }
 }
 
 // distribute the KNOWN-correct words across Whisper's timing (Whisper is only a timing reference — its
