@@ -117,7 +117,7 @@ export function genAss(words, dur, hook, rtl = false) {
   for (const w of W) { cur.push(w); const d = w.end - cur[0].start; if (cur.length >= 3 || d >= 1.3 || /[.!?]$/.test(w.text)) { lines.push(cur); cur = [] } }
   if (cur.length) lines.push(cur)
   let ev = hook ? `Dialogue: 0,0:00:00.00,${aT(Math.min(3.2, dur))},Hook,,0,0,0,,${rtl ? RLM : ''}${esc(hook)}\n` : ''
-  ev += emitCaptionLines(lines, rtl)
+  ev += emitCaptionLines(lines, rtl, 84, 1580) // Cap fontsize 84, lower-third baseline
   return `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080

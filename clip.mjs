@@ -324,22 +324,34 @@ const assEsc = (t) => String(t).replace(/[{}\\]/g, '').replace(/\n/g, ' ')
 // (left-to-right) order — wrong. Fix: REVERSE the words (first word ends up rightmost) and emit one event
 // per word time-window with cumulative colouring (words spoken so far = yellow), which gives the correct
 // right-to-left word order AND a right-to-left highlight. (verified by pixel-position of the lit word.)
-export function emitCaptionLines(lines, rtl) {
-  const RLM = '‏', YEL = '&H0000FFFF&', WHT = '&H00FFFFFF&'
+export function emitCaptionLines(lines, rtl, fontsize = 84, y = 1600) {
   let ev = ''
-  for (const ln of lines) {
-    if (rtl) {
-      const rev = [...ln].reverse()
-      ln.forEach((w, i) => {
-        const segEnd = i < ln.length - 1 ? ln[i + 1].start : ln[ln.length - 1].end
-        const txt = rev.map((rw) => `{\\c${ln.indexOf(rw) <= i ? YEL : WHT}}${rw.text}`).join(' ')
-        ev += `Dialogue: 0,${aT(w.start)},${aT(Math.max(w.start + 0.05, segEnd))},Cap,,0,0,0,,${RLM}${txt}\n`
-      })
-    } else {
+  if (!rtl) { // LTR: a single \kf karaoke sweep per line
+    for (const ln of lines) {
       const start = ln[0].start, end = ln[ln.length - 1].end; let text = ''
       ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; text += `{\\kf${Math.max(1, Math.round((next - w.start) * 100))}}${w.text} ` })
       ev += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${text.trim()}\n`
     }
+    return ev
+  }
+  // RTL: place each word at an absolute \pos (right-to-left, first word rightmost) so libass bidi/karaoke
+  // can't reorder or shift it; flip each word white->yellow at its onset via \t. Fixed layout => no jumping.
+  const CW = 0.46 * fontsize, GAP = 0.42 * fontsize, MAXW = 1010
+  for (const ln of lines) {
+    const lineStart = ln[0].start, lineEnd = ln[ln.length - 1].end
+    const widths = ln.map((w) => Math.max(CW, w.text.replace(/\s/g, '').length * CW))
+    let total = widths.reduce((a, b) => a + b, 0) + GAP * (ln.length - 1)
+    const scale = total > MAXW ? MAXW / total : 1
+    const sw = widths.map((x) => x * scale), gap = GAP * scale
+    total *= scale
+    let cursor = 540 + total / 2 // right edge of the centred line
+    ln.forEach((w, i) => {
+      const cx = Math.round(cursor - sw[i] / 2) // first word (i=0) -> rightmost slot
+      cursor -= sw[i] + gap
+      const onMs = Math.max(0, Math.round((w.start - lineStart) * 1000))
+      const col = onMs > 0 ? `\\1c&HFFFFFF&\\t(${onMs},${onMs + 1},\\1c&H00FFFF&)` : `\\1c&H00FFFF&`
+      ev += `Dialogue: 0,${aT(lineStart)},${aT(lineEnd)},Cap,,0,0,0,,{\\an5\\pos(${cx},${y})${col}}${w.text}\n`
+    })
   }
   return ev
 }
@@ -361,7 +373,7 @@ export function buildAss(words, win, hook, brand) {
   // RTL (Hebrew/Arabic) detected from the actual caption glyphs.
   const rtl = /[֐-׿؀-ۿ]/.test(W.map((w) => w.text).join('') + (hook || ''))
   const RLM = '‏'
-  let events = emitCaptionLines(lines, rtl)
+  let events = emitCaptionLines(lines, rtl, 76, 1620) // Cap fontsize 76, lower-third baseline
   if (hook) events = `Dialogue: 0,0:00:00.00,${aT(Math.min(3, dur))},Hook,,0,0,0,,${rtl ? RLM : ''}${assEsc(hook)}\n` + events
   if (brand) events += `Dialogue: 0,0:00:00.00,${aT(dur)},Brand,,0,0,0,,${assEsc(brand)}\n`
 
