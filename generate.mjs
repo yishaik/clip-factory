@@ -7,7 +7,7 @@ import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync
 import { execFile } from 'node:child_process'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { transcribe } from './clip.mjs'
+import { transcribe, emitCaptionLines } from './clip.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 try {
@@ -111,18 +111,13 @@ export function alignToTiming(trueWords, wWords) {
 export function genAss(words, dur, hook, rtl = false) {
   const aT = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = (s % 60); return `${h}:${String(m).padStart(2, '0')}:${x.toFixed(2).padStart(5, '0')}` }
   const esc = (t) => String(t).replace(/[{}\\]/g, '').replace(/\n/g, ' ')
-  const RLM = '‏'                                  // force RTL base direction so words/punctuation order correctly
-  const KTAG = rtl ? 'k' : 'kf'                          // \k = instant highlight (no LTR fill sweep); \kf = smooth fill
+  const RLM = '‏'                                  // force RTL base direction
   const W = words.map((w) => ({ start: w.start, end: Math.max(w.start + 0.1, w.end), text: esc(w.text) }))
   const lines = []; let cur = []
   for (const w of W) { cur.push(w); const d = w.end - cur[0].start; if (cur.length >= 3 || d >= 1.3 || /[.!?]$/.test(w.text)) { lines.push(cur); cur = [] } }
   if (cur.length) lines.push(cur)
   let ev = hook ? `Dialogue: 0,0:00:00.00,${aT(Math.min(3.2, dur))},Hook,,0,0,0,,${rtl ? RLM : ''}${esc(hook)}\n` : ''
-  for (const ln of lines) {
-    const start = ln[0].start, end = ln[ln.length - 1].end; let text = ''
-    ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; text += `{\\${KTAG}${Math.max(1, Math.round((next - w.start) * 100))}}${w.text} ` })
-    ev += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${rtl ? RLM : ''}${text.trim()}\n`
-  }
+  ev += emitCaptionLines(lines, rtl)
   return `[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080

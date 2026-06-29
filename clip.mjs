@@ -319,6 +319,31 @@ export async function pickMoments(cues, n) {
 const aT = (s) => { const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = (s % 60); return `${h}:${String(m).padStart(2, '0')}:${sec.toFixed(2).padStart(5, '0')}` }
 const assEsc = (t) => String(t).replace(/[{}\\]/g, '').replace(/\n/g, ' ')
 
+// Emit Cap dialogue events for grouped word-lines. LTR: one \kf karaoke sweep per line.
+// RTL: libass does NOT bidi-reorder karaoke/override runs, so multi-word Hebrew comes out in LOGICAL
+// (left-to-right) order — wrong. Fix: REVERSE the words (first word ends up rightmost) and emit one event
+// per word time-window with cumulative colouring (words spoken so far = yellow), which gives the correct
+// right-to-left word order AND a right-to-left highlight. (verified by pixel-position of the lit word.)
+export function emitCaptionLines(lines, rtl) {
+  const RLM = '‏', YEL = '&H0000FFFF&', WHT = '&H00FFFFFF&'
+  let ev = ''
+  for (const ln of lines) {
+    if (rtl) {
+      const rev = [...ln].reverse()
+      ln.forEach((w, i) => {
+        const segEnd = i < ln.length - 1 ? ln[i + 1].start : ln[ln.length - 1].end
+        const txt = rev.map((rw) => `{\\c${ln.indexOf(rw) <= i ? YEL : WHT}}${rw.text}`).join(' ')
+        ev += `Dialogue: 0,${aT(w.start)},${aT(Math.max(w.start + 0.05, segEnd))},Cap,,0,0,0,,${RLM}${txt}\n`
+      })
+    } else {
+      const start = ln[0].start, end = ln[ln.length - 1].end; let text = ''
+      ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; text += `{\\kf${Math.max(1, Math.round((next - w.start) * 100))}}${w.text} ` })
+      ev += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${text.trim()}\n`
+    }
+  }
+  return ev
+}
+
 // build a styled ASS: word-by-word karaoke captions (lower third) + a hook title card (top, first 3s) + optional brand
 export function buildAss(words, win, hook, brand) {
   const dur = win.end - win.start
@@ -333,17 +358,10 @@ export function buildAss(words, win, hook, brand) {
   }
   if (cur.length) lines.push(cur)
 
-  // RTL (Hebrew/Arabic) handling: \k (instant, no left-to-right fill sweep) + RLM prefix to force RTL order,
-  // so the karaoke highlight advances right-to-left. Detected from the actual caption glyphs.
+  // RTL (Hebrew/Arabic) detected from the actual caption glyphs.
   const rtl = /[֐-׿؀-ۿ]/.test(W.map((w) => w.text).join('') + (hook || ''))
-  const KTAG = rtl ? 'k' : 'kf', RLM = '‏'
-  let events = ''
-  for (const ln of lines) {
-    const start = ln[0].start, end = ln[ln.length - 1].end
-    let text = ''
-    ln.forEach((w, i) => { const next = i < ln.length - 1 ? ln[i + 1].start : end; const cs = Math.max(1, Math.round((next - w.start) * 100)); text += `{\\${KTAG}${cs}}${w.text} ` })
-    events += `Dialogue: 0,${aT(start)},${aT(end)},Cap,,0,0,0,,${rtl ? RLM : ''}${text.trim()}\n`
-  }
+  const RLM = '‏'
+  let events = emitCaptionLines(lines, rtl)
   if (hook) events = `Dialogue: 0,0:00:00.00,${aT(Math.min(3, dur))},Hook,,0,0,0,,${rtl ? RLM : ''}${assEsc(hook)}\n` + events
   if (brand) events += `Dialogue: 0,0:00:00.00,${aT(dur)},Brand,,0,0,0,,${assEsc(brand)}\n`
 
