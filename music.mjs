@@ -28,13 +28,15 @@ export async function generateMusic(prompt, seconds = 20, outPath) {
   outPath = outPath || join(MUSIC_DIR, '_ai_track.mp3')
   mkdirSync(dirname(outPath), { recursive: true })
   const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
-  // official model endpoint (no version hash needed); Prefer: wait returns synchronously when it can
-  const r = await fetch('https://api.replicate.com/v1/models/meta/musicgen/predictions', {
+  // resolve the current meta/musicgen version, then create a version-based prediction (Prefer: wait = sync-ish)
+  let version = process.env.MUSICGEN_VERSION
+  if (!version) { const m = await (await fetch('https://api.replicate.com/v1/models/meta/musicgen', { headers })).json(); version = m?.latest_version?.id }
+  if (!version) throw new Error('could not resolve MusicGen version from Replicate')
+  let pred = await (await fetch('https://api.replicate.com/v1/predictions', {
     method: 'POST', headers: { ...headers, prefer: 'wait' },
-    body: JSON.stringify({ input: { prompt: `${prompt}. instrumental, no vocals, seamless loop`, duration: dur, model_version: 'stereo-large', output_format: 'mp3', normalization_strategy: 'loudness' } }),
-  })
-  let pred = await r.json()
-  if (pred.error) throw new Error('replicate: ' + JSON.stringify(pred.error))
+    body: JSON.stringify({ version, input: { prompt: `${prompt}. instrumental, no vocals, seamless loop`, duration: dur, model_version: 'stereo-large', output_format: 'mp3', normalization_strategy: 'loudness' } }),
+  })).json()
+  if (pred.error || pred.detail) throw new Error('replicate: ' + (pred.error || pred.detail))
   for (let i = 0; pred.status && !['succeeded', 'failed', 'canceled'].includes(pred.status) && i < 120; i++) {
     await sleep(2000)
     pred = await (await fetch(pred.urls.get, { headers })).json()
