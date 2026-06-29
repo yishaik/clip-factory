@@ -223,8 +223,21 @@ async function claudeCloud(prompt, { json = false, ms = 90000 } = {}) {
   } catch { return null }
 }
 
-// DECISION engine — strongest first, then a fast reliable cloud model, then local (so hooks never silently
-// drop to heuristic just because the slow preview model timed out).
+// OpenAI chat fallback (used when Gemini is unavailable, before dropping to weak local Gemma).
+async function openaiCloud(prompt, { json = false, ms = 60000 } = {}) {
+  const key = process.env.OPENAI_API_KEY; if (!key) return null
+  try {
+    const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms)
+    const body = { model: process.env.CLIP_OPENAI_MODEL || 'gpt-4o', messages: [{ role: 'user', content: prompt }], temperature: 0.6 }
+    if (json) body.response_format = { type: 'json_object' }
+    const r = await fetch('https://api.openai.com/v1/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: ctrl.signal }).finally(() => clearTimeout(t))
+    if (!r.ok) return null
+    return ((await r.json()).choices?.[0]?.message?.content || '').trim() || null
+  } catch { return null }
+}
+
+// DECISION engine — strongest first, then a fast reliable cloud model, then OpenAI, then local (so hooks
+// never silently drop to heuristic just because a model is down/denied).
 async function decide(prompt, opts = {}) {
   if (process.env.ANTHROPIC_API_KEY) { const c = await claudeCloud(prompt, opts); if (c) return c }
   const think = Number(process.env.CLIP_THINK_BUDGET || 2048) // 3.1-pro now requires thinking; bound it + big output budget
@@ -232,6 +245,7 @@ async function decide(prompt, opts = {}) {
   if (pro) return pro
   const fast = await geminiCloud(prompt, { ...opts, model: 'gemini-flash-latest', ms: 40000, think, maxTokens: 16384 })
   if (fast) return fast
+  const oa = await openaiCloud(prompt, opts); if (oa) return oa // OpenAI before the weak local fallback
   return await ollama(prompt, opts)
 }
 
