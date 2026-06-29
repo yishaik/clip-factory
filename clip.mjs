@@ -336,7 +336,7 @@ export function emitCaptionLines(lines, rtl, fontsize = 84, y = 1600) {
   }
   // RTL: place each word at an absolute \pos (right-to-left, first word rightmost) so libass bidi/karaoke
   // can't reorder or shift it; flip each word white->yellow at its onset via \t. Fixed layout => no jumping.
-  const CW = 0.46 * fontsize, GAP = 0.42 * fontsize, MAXW = 1010
+  const CW = 0.46 * fontsize, GAP = 0.42 * fontsize, MAXW = 1010, RLE = '‫', PDF = '‬'
   for (const ln of lines) {
     const lineStart = ln[0].start, lineEnd = ln[ln.length - 1].end
     const widths = ln.map((w) => Math.max(CW, w.text.replace(/\s/g, '').length * CW))
@@ -350,7 +350,8 @@ export function emitCaptionLines(lines, rtl, fontsize = 84, y = 1600) {
       cursor -= sw[i] + gap
       const onMs = Math.max(0, Math.round((w.start - lineStart) * 1000))
       const col = onMs > 0 ? `\\1c&HFFFFFF&\\t(${onMs},${onMs + 1},\\1c&H00FFFF&)` : `\\1c&H00FFFF&`
-      ev += `Dialogue: 0,${aT(lineStart)},${aT(lineEnd)},Cap,,0,0,0,,{\\an5\\pos(${cx},${y})${col}}${w.text}\n`
+      // wrap each isolated word in a strong RTL embedding (RLE…PDF) so trailing punctuation (.,?!) sits LEFT
+      ev += `Dialogue: 0,${aT(lineStart)},${aT(lineEnd)},Cap,,0,0,0,,{\\an5\\pos(${cx},${y})${col}}${RLE}${w.text}${PDF}\n`
     })
   }
   return ev
