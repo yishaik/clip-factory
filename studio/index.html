@@ -132,8 +132,11 @@ function render(r){
     el.innerHTML=`<video src="${src}" controls preload="metadata"></video><div class="meta">`+
       (c.viral!=null?`<div class="vir">🔥 viral ${c.viral}</div>`:'')+
       `<div class="hook">${(c.hook||'').replace(/</g,'&lt;')}</div><div class="sub">${c.dur||''}s</div>`+
-      `<a href="${src}" download>⬇ download</a> &nbsp;·&nbsp; <a href="#" class="pub">📤 publish</a><div class="puburl" style="margin-top:6px;font-size:12.5px"></div></div>`;
+      `<a href="${src}" download>⬇ download</a> &nbsp;·&nbsp; <a href="#" class="pub">📤 publish</a><div class="puburl" style="margin-top:6px;font-size:12.5px"></div>`+
+      `<div class="rate" style="margin-top:8px;font-size:17px"><a href="#" class="r-good" title="I'd post this">👍</a> &nbsp;&nbsp; <a href="#" class="r-bad" title="not it">👎</a> <span class="rmsg" style="font-size:12px;color:var(--mut);margin-left:6px"></span></div></div>`;
     el.querySelector('.pub').onclick=ev=>{ ev.preventDefault(); publishClip(c, el); };
+    el.querySelector('.r-good').onclick=ev=>{ ev.preventDefault(); rate(c, el, 'good'); };
+    el.querySelector('.r-bad').onclick=ev=>{ ev.preventDefault(); rate(c, el, 'bad'); };
     results.appendChild(el); });
 }
 async function publishClip(c, el){
@@ -147,6 +150,14 @@ async function publishClip(c, el){
       if(s.status==='done'){ const url=s.result?.url; a.style.display='none'; out.innerHTML=url?`✅ <a href="${url}" target="_blank">${url}</a>`:'published'; return; }
       if(s.status==='error'){ a.textContent='❌ failed — see log'; a.style.pointerEvents='auto'; setLog(s.log); return; } }
   }catch{ a.textContent='❌ error'; a.style.pointerEvents='auto'; }
+}
+// derive {run,id} from a clip path .../clips/<run>/clip-N.mp4  -> for the kappa feedback loop
+function clipKey(file){ const p=String(file).replace(/\\/g,'/').split('/'); const id=(p.pop()||'').replace(/\.mp4$/i,''); return { run:p.pop()||'', id }; }
+async function rate(c, el, human){
+  const {run,id}=clipKey(c.file); const msg=el.querySelector('.rmsg'); msg.textContent='…';
+  try{ const j=await (await fetch(wt('/api/feedback'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({run,id,human})})).json();
+    msg.textContent=j.ok?(human==='good'?'👍 saved':'👎 saved'):('❌ '+(j.error||'')); }
+  catch{ msg.textContent='❌ error'; }
 }
 async function start(btn, url, body){
   btn.disabled=true; btn.dataset.t=btn.innerHTML; btn.innerHTML='working…';
