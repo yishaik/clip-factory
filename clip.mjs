@@ -6,7 +6,7 @@
 //   3) ffmpeg: cut, reformat to 1080x1920 with blurred bg, burn TikTok-style captions
 // Tools: ffmpeg, ffprobe, whisper (all local/free). Zero npm deps.
 import { execFile } from 'node:child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync, statSync } from 'node:fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync, statSync, appendFileSync } from 'node:fs'
 import { join, dirname, basename, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -262,10 +262,10 @@ async function gemma(prompt, opts = {}) {
 export async function rankWindowsLLM(windows) {
   const cands = windows.slice(0, 10) // heuristic pre-filter -> LLM precision-ranks these
   const list = cands.map((w, i) => `[${i}] (${Math.round(w.end - w.start)}s) ${w.text.slice(0, 200)}`).join('\n\n')
-  const prompt = `You are a world-class short-form video editor (TikTok/Reels/YouTube Shorts). Below are numbered transcript segments from one long video. Score each 0-100 for viral potential as a STANDALONE short clip.\n` +
-    `Reward: a strong hook in the first sentence, an emotional/surprising/contrarian payoff, a quotable line, clarity without outside context.\n` +
-    `Penalize: rambling, starting mid-thought, filler, or needing context to make sense.\n` +
-    `Return ONLY a JSON object {"clips":[{"i":<index>,"score":<0-100>,"hook":"<punchy 4-8 word caption, no hashtags>"}]} with one entry per segment. Keep it compact.\n\nSEGMENTS:\n${list}`
+  const prompt = `You are a world-class short-form video editor (TikTok/Reels/YouTube Shorts). Below are numbered transcript segments from one long video. Judge each as a STANDALONE short clip on three dimensions — HOOK (strong first sentence), PAYOFF (emotional/surprising/contrarian/quotable), CLARITY (makes sense with no outside context) — then give an overall 0-100.\n` +
+    `Penalize rambling, starting mid-thought, filler, or needing context. Length is NOT quality — never prefer a segment just because it is longer.\n` +
+    `For each segment, write the reason FIRST (cite the hook/payoff/clarity you saw), THEN the overall score — reason before the number.\n` +
+    `Return ONLY a JSON object {"clips":[{"i":<index>,"reason":"<one short clause>","hook":"<punchy 4-8 word caption, no hashtags>","score":<0-100>}]} with one entry per segment. Keep it compact.\n\nSEGMENTS:\n${list}`
   const raw = await decide(prompt, { json: true, ms: 90000 })
   if (!raw) return null
   let arr
@@ -309,8 +309,9 @@ export async function pickMoments(cues, n) {
   const lines = cues.map((c) => `${c.start.toFixed(1)} ${c.text}`).join('\n')
   const prompt = `You are a world-class short-form video editor (TikTok/Reels/YouTube Shorts). Below is a timestamped transcript of one long video — each line is "<startSeconds> <text>".\n` +
     `Find the ${want} BEST standalone short-clip moments, each ${MIN}-${MAX} seconds long. Choose START and END seconds so the clip OPENS on a strong hook and CLOSES on a complete thought — it must make sense with zero outside context.\n` +
-    `Reward: a gripping first line, an emotional/surprising/contrarian payoff, a quotable line, a complete mini-story. Penalize: rambling, starting mid-thought, filler.\n` +
-    `Return ONLY JSON {"clips":[{"start":<sec>,"end":<sec>,"score":<0-100>,"hook":"<punchy 4-8 word caption, no hashtags>","reason":"<one short clause>"}]}, best first.\n\nTRANSCRIPT:\n${lines}`
+    `Judge each moment on three dimensions: HOOK (gripping first line), PAYOFF (emotional/surprising/contrarian/quotable), CLARITY (a complete mini-story needing no outside context). Penalize rambling, mid-thought starts, filler. Length is NOT quality — a tight ${MIN}s clip can beat a ${MAX}s one; never prefer a moment just because it is longer.\n` +
+    `For each clip, write the reason FIRST (cite the hook/payoff/clarity you saw), THEN the sub-scores, THEN the overall score — reason before the numbers.\n` +
+    `Return ONLY JSON {"clips":[{"start":<sec>,"end":<sec>,"reason":"<one short clause citing hook/payoff/clarity>","hook_score":<0-100>,"payoff_score":<0-100>,"clarity_score":<0-100>,"hook":"<punchy 4-8 word caption, no hashtags>","score":<overall 0-100>}]}, best first.\n\nTRANSCRIPT:\n${lines}`
   const raw = await decide(prompt, { json: true, ms: 120000 })
   if (!raw) return null
   let arr
@@ -521,6 +522,23 @@ export async function makeClips(input, { n = 3, outDir, ai = false } = {}) {
     results.push({ idx: i + 1, file, start: w.start, end: w.end, dur: +(w.end - w.start).toFixed(1), viralScore: w.llmScore ?? null, hook: w.hook || null, reason: w.reason || null, heuristic: w.score, title, text: w.text })
   }
   writeFileSync(join(outDir, 'clips.json'), JSON.stringify(results, null, 2))
+  // Calibration: log the decision engine's verdict on every scored candidate (picked = became a
+  // clip). Lets `kappa` later measure whether the engine's confidence matches your taste — pair
+  // these with your 👍/👎 (Studio or feedback.mjs) and run kappa-feedback.mjs.
+  try {
+    const run = basename(outDir)
+    const fbDir = join(ROOT, 'feedback'); mkdirSync(fbDir, { recursive: true })
+    const lines = (windows || []).map((w, k) => {
+      const ci = chosen.indexOf(w)
+      return JSON.stringify({
+        ts: new Date().toISOString(), run,
+        id: ci >= 0 ? `clip-${ci + 1}` : `cand-${k + 1}`,
+        picked: ci >= 0, score: w.llmScore ?? w.score ?? null,
+        start: +(+w.start).toFixed(1), end: +(+w.end).toFixed(1), hook: w.hook || null,
+      })
+    })
+    if (lines.length) appendFileSync(join(fbDir, 'decisions.jsonl'), lines.join('\n') + '\n')
+  } catch {}
   if (process.env.CLIP_KEEP !== '1') { try { rmSync(workDir, { recursive: true, force: true }) } catch {} }
   return { outDir, clips: results }
 }

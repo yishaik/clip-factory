@@ -29,3 +29,6 @@ music/*.m4a
 music/*.wav
 music/*.ogg
 music/*.aac
+
+# kappa calibration logs (local taste feedback + decision verdicts)
+feedback/

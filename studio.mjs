@@ -4,7 +4,7 @@
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { createReadStream, statSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs'
+import { createReadStream, statSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { discover } from './source.mjs'
@@ -96,6 +96,14 @@ const server = createServer(async (req, res) => {
       const { file = '', title = 'Short', privacy = 'unlisted' } = await body(req)
       if (!underRoot(file)) return json(res, 400, { error: 'bad file' })
       return json(res, 200, { id: startJob('publish', ['publish.mjs', file, title.slice(0, 95) || 'Short', 'Auto-clipped by Clip Factory.', privacy], {}) })
+    }
+    if (req.method === 'POST' && p === '/api/feedback') {
+      // record your taste verdict on a produced clip, for kappa calibration (kappa-feedback.mjs)
+      const { run = '', id = '', human = '' } = await body(req)
+      if (!run || !id || !['good', 'bad'].includes(human)) return json(res, 400, { error: 'need run, id, human=good|bad' })
+      const d = join(ROOT, 'feedback'); mkdirSync(d, { recursive: true })
+      appendFileSync(join(d, 'feedback.jsonl'), JSON.stringify({ ts: new Date().toISOString(), run, id, human }) + '\n')
+      return json(res, 200, { ok: true })
     }
     if (req.method === 'GET' && p === '/api/job') {
       const job = jobs.get(u.searchParams.get('id')); if (!job) return json(res, 404, { error: 'no job' })
