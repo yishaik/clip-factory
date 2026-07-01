@@ -265,7 +265,7 @@ export async function rankWindowsLLM(windows) {
   const prompt = `You are a world-class short-form video editor (TikTok/Reels/YouTube Shorts). Below are numbered transcript segments from one long video. Judge each as a STANDALONE short clip on three dimensions — HOOK (strong first sentence), PAYOFF (emotional/surprising/contrarian/quotable), CLARITY (makes sense with no outside context) — then give an overall 0-100.\n` +
     `Penalize rambling, starting mid-thought, filler, or needing context. Length is NOT quality — never prefer a segment just because it is longer.\n` +
     `For each segment, write the reason FIRST (cite the hook/payoff/clarity you saw), THEN the overall score — reason before the number.\n` +
-    `Return ONLY a JSON object {"clips":[{"i":<index>,"reason":"<one short clause>","hook":"<punchy 4-8 word caption, no hashtags>","score":<0-100>}]} with one entry per segment. Keep it compact.\n\nSEGMENTS:\n${list}`
+    `Return ONLY a JSON object {"clips":[{"i":<index>,"reason":"<one short clause>","hook":"<4-8 word caption — must contain a specific number, name, or concrete event; NEVER vague openers like \\'you\\'ve noticed\\' / \\'what if\\' / \\'something\\' / \\'this is\\'>","score":<0-100>}]} with one entry per segment. Keep it compact.\n\nSEGMENTS:\n${list}`
   const raw = await decide(prompt, { json: true, ms: 90000 })
   if (!raw) return null
   let arr
@@ -311,7 +311,7 @@ export async function pickMoments(cues, n) {
     `Find the ${want} BEST standalone short-clip moments, each ${MIN}-${MAX} seconds long. Choose START and END seconds so the clip OPENS on a strong hook and CLOSES on a complete thought — it must make sense with zero outside context.\n` +
     `Judge each moment on three dimensions: HOOK (gripping first line), PAYOFF (emotional/surprising/contrarian/quotable), CLARITY (a complete mini-story needing no outside context). Penalize rambling, mid-thought starts, filler. Length is NOT quality — a tight ${MIN}s clip can beat a ${MAX}s one; never prefer a moment just because it is longer.\n` +
     `For each clip, write the reason FIRST (cite the hook/payoff/clarity you saw), THEN the sub-scores, THEN the overall score — reason before the numbers.\n` +
-    `Return ONLY JSON {"clips":[{"start":<sec>,"end":<sec>,"reason":"<one short clause citing hook/payoff/clarity>","hook_score":<0-100>,"payoff_score":<0-100>,"clarity_score":<0-100>,"hook":"<punchy 4-8 word caption, no hashtags>","score":<overall 0-100>}]}, best first.\n\nTRANSCRIPT:\n${lines}`
+    `Return ONLY JSON {"clips":[{"start":<sec>,"end":<sec>,"reason":"<one short clause citing hook/payoff/clarity>","hook_score":<0-100>,"payoff_score":<0-100>,"clarity_score":<0-100>,"hook":"<4-8 word caption — must contain a specific number, name, or concrete event; NEVER vague openers like \\'you\\'ve noticed\\' / \\'what if\\' / \\'something\\' / \\'this is\\'>","score":<overall 0-100>}]}, best first.\n\nTRANSCRIPT:\n${lines}`
   const raw = await decide(prompt, { json: true, ms: 120000 })
   if (!raw) return null
   let arr
@@ -482,7 +482,7 @@ async function renderClip(input, win, idx, outDir, workDir, words) {
   if (frame === 'smart') console.error(`     framing: ${note} (${Math.round((fi.frac || 0) * 100)}% faces)`)
   await run('ffmpeg', ['-y', '-ss', String(win.start), '-t', String(dur), '-i', resolve(input),
     '-filter_complex', vf, '-map', '[v]', '-map', '0:a', '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', resolve(out)], { cwd: workDir })
-  return out
+  return { file: out, frame: mode }
 }
 
 export async function makeClips(input, { n = 3, outDir, ai = false } = {}) {
@@ -516,10 +516,10 @@ export async function makeClips(input, { n = 3, outDir, ai = false } = {}) {
     const w = chosen[i]
     const sc = w.llmScore != null ? `viral ${w.llmScore}` : `score ${w.score}`
     console.error(`  clip ${i + 1}: ${w.start.toFixed(1)}-${w.end.toFixed(1)}s (${sc})${w.hook ? ' — “' + w.hook + '”' : ''}`)
-    const file = await renderClip(input, w, i + 1, outDir, workDir, words)
+    const { file, frame } = await renderClip(input, w, i + 1, outDir, workDir, words)
     let title = w.hook || null
     if (!title && ai) title = await gemma(`Write a punchy 4-8 word social caption for this clip, no quotes/hashtags:\n"${w.text.slice(0, 400)}"`)
-    results.push({ idx: i + 1, file, start: w.start, end: w.end, dur: +(w.end - w.start).toFixed(1), viralScore: w.llmScore ?? null, hook: w.hook || null, reason: w.reason || null, heuristic: w.score, title, text: w.text })
+    results.push({ idx: i + 1, file, frame, start: w.start, end: w.end, dur: +(w.end - w.start).toFixed(1), viralScore: w.llmScore ?? null, hook: w.hook || null, reason: w.reason || null, heuristic: w.score, title, text: w.text })
   }
   writeFileSync(join(outDir, 'clips.json'), JSON.stringify(results, null, 2))
   // Calibration: log the decision engine's verdict on every scored candidate (picked = became a

@@ -80,35 +80,56 @@ for (const v of vids) {
 markSeen(attempted.map((v) => v.id))
 
 // ── PUBLISH stage (opt-in: PIPE_PUBLISH=1) — auto-upload the best clips to YouTube ──
-// Picks clips scoring >= PIPE_PUBLISH_MIN, top PIPE_PUBLISH_MAX, privacy PIPE_PUBLISH_PRIVACY.
-// Records uploads in .published.json so re-runs never double-post the same file.
+// Anti-slop gate: a clip goes PUBLIC only if it passes all three checks — score >= PIPE_PUBLISH_MIN
+// (default 88), framing is face-crop (not blurred bg), and hook contains a concrete anchor (number /
+// name / event). Anything that fails goes UNLISTED for manual review. Override all privacy with PIPE_PUBLISH_PRIVACY.
 if (process.env.PIPE_PUBLISH && done.length) {
-  const MIN = Number(process.env.PIPE_PUBLISH_MIN || 85)
-  const MAX = Number(process.env.PIPE_PUBLISH_MAX || 3)
-  const PRIV = process.env.PIPE_PUBLISH_PRIVACY || 'unlisted'
+  const MIN = Number(process.env.PIPE_PUBLISH_MIN || 88)
+  const MAX_CLIPS = Number(process.env.PIPE_PUBLISH_MAX || 3)
+  const FORCE_PRIV = process.env.PIPE_PUBLISH_PRIVACY || ''
+
+  const VAGUE = /\b(you'?ve noticed|what if|something|this is that|here'?s why|believe it or not)\b/i
+  const hookIsClean = (h) => !!(h && h.length >= 6 && !VAGUE.test(h) && (/\d/.test(h) || /[A-Z]/.test((h + '  ').slice(4))))
+  const gatePrivacy = (c) => {
+    if (FORCE_PRIV) return FORCE_PRIV
+    if ((c.viralScore ?? 0) < MIN) return 'unlisted'
+    if (c.frame === 'blur') return 'unlisted'
+    if (!hookIsClean(c.hook || c._title)) return 'unlisted'
+    return 'public'
+  }
+
+  const STOP = new Set(['the','a','an','is','are','was','it','in','of','to','and','or','for','on','at','by','with','that','this'])
+  const tagsFromHook = (h) => ['shorts', ...(h || '').toLowerCase().match(/\b[a-z]{4,}\b/g || []).filter((w) => !STOP.has(w)).slice(0, 8)]
+
   const logf = join(ROOT, '.published.json')
   const pub = existsSync(logf) ? JSON.parse(readFileSync(logf, 'utf8')) : []
   const already = new Set(pub.map((p) => p.file))
   const cand = done.flatMap((v) => (v.clips || []).map((c) => ({ ...c, _title: v.title, _url: v.url })))
-    .filter((c) => (c.viralScore ?? 0) >= MIN && !already.has(c.file))
+    .filter((c) => (c.viralScore ?? 0) >= 70 && !already.has(c.file))
     .sort((a, b) => (b.viralScore ?? 0) - (a.viralScore ?? 0))
-    .slice(0, MAX)
+    .slice(0, MAX_CLIPS)
+
   const DRY = !!process.env.PIPE_PUBLISH_DRY
-  console.log(`\n[publish] ${cand.length} clip(s) scoring >=${MIN} -> YouTube (${PRIV})${DRY ? ' [DRY RUN]' : ''}`)
-  if (cand.length && !DRY) {
-    const { uploadShort } = await import('./publish.mjs')
-    for (const c of cand) {
-      const title = (c.hook || c._title || 'Short').slice(0, 95)
-      const desc = `From "${c._title}"\n${c._url}\nAuto-clipped by Clip Factory.`
-      try {
-        const r = await uploadShort(c.file, title, desc, PRIV)
-        console.log(`   ✅ ${r.url}  "${title}"`)
-        pub.push({ file: c.file, id: r.id, url: r.url, title, score: c.viralScore ?? null })
-      } catch (e) { console.log(`   ❌ ${title.slice(0, 40)} — ${String(e.message).slice(0, 140)}`) }
+  if (cand.length) {
+    console.log(`\n[publish] ${cand.length} clip(s) -> YouTube${DRY ? ' [DRY RUN]' : ''}`)
+    if (!DRY) {
+      const { uploadShort } = await import('./publish.mjs')
+      for (const c of cand) {
+        const priv = gatePrivacy(c)
+        const title = (c.hook || c._title || 'Short').slice(0, 95)
+        const excerpt = (c.text || '').slice(0, 120).trim()
+        const desc = [c.reason, excerpt ? `"${excerpt}…"` : '', `Watch the full video: ${c._url}`].filter(Boolean).join('\n\n')
+        try {
+          const r = await uploadShort(c.file, title, desc, priv, tagsFromHook(title))
+          const icon = priv === 'public' ? '✅' : '📋'
+          console.log(`   ${icon} [${priv}] ${r.url}  "${title.slice(0, 44)}"`)
+          pub.push({ file: c.file, id: r.id, url: r.url, title, score: c.viralScore ?? null, privacy: priv })
+        } catch (e) { console.log(`   ❌ "${title.slice(0, 40)}" — ${String(e.message).slice(0, 140)}`) }
+      }
+      writeFileSync(logf, JSON.stringify(pub, null, 2))
+    } else {
+      for (const c of cand) console.log(`   would publish [${gatePrivacy(c)}]: ${(c.hook || c._title || '').slice(0, 55)}  (viral ${c.viralScore ?? '?'})`)
     }
-    writeFileSync(logf, JSON.stringify(pub, null, 2))
-  } else if (DRY) {
-    for (const c of cand) console.log(`   would publish: ${(c.hook || c._title || 'Short').slice(0, 60)}  (viral ${c.viralScore ?? '?'})  ${c.file}`)
   }
 }
 

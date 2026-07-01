@@ -24,11 +24,12 @@ async function token() {
   return (await run('gcloud', ['auth', 'application-default', 'print-access-token'])).trim() // fallback to ADC
 }
 
-export async function uploadShort(file, title, description = '', privacy = 'public') {
+export async function uploadShort(file, title, description = '', privacy = 'public', tags = []) {
   if (!existsSync(file)) throw new Error('not found: ' + file)
   const tok = await token()
   const desc = (description + '\n\n#Shorts').trim()
-  const meta = { snippet: { title: title.slice(0, 95), description: desc.slice(0, 4900), categoryId: '24', tags: ['shorts', 'viral'] },
+  const allTags = ['shorts', ...tags].filter((t, i, a) => a.indexOf(t) === i).slice(0, 30)
+  const meta = { snippet: { title: title.slice(0, 95), description: desc.slice(0, 4900), categoryId: '24', tags: allTags },
     status: { privacyStatus: privacy, selfDeclaredMadeForKids: false } }
   // 1) start a resumable session
   const size = statSync(file).size
