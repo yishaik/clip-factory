@@ -440,17 +440,18 @@ async function renderClip(input, win, idx, outDir, workDir, words) {
   const assArg = basename(assPath) // ffmpeg cwd=workDir so the path is simple (libass-safe)
   const out = join(outDir, `clip-${idx}.mp4`)
   // framing: 'smart' (default) auto-picks per clip — crop around the speaker when a face is consistently
-  // present, else fall back to blurred-fit (safe for B-roll). 'fill'/'blur' force a mode.
+  // present, else centre fill-crop (B-roll looks native filled; blurred bars read as content-farm slop).
+  // 'fill'/'blur' force a mode. Blur survives only as the graphics fallback below.
   const frame = process.env.CLIP_FRAME || 'smart'
   let mode = frame, fi = { x: 0.5, y: 0.42, size: 0 }
   if (frame === 'smart') {
     fi = await faceInfo(input, win)
     // Haar is a sparse detector — even a clear talking head only registers a face in ~30-45% of frames,
-    // while B-roll sits near 0. Gate low so real speakers crop and only true B-roll falls back to blur.
-    mode = (fi.frac >= 0.15 && fi.conf >= 5) ? 'crop' : 'blur'
+    // while B-roll sits near 0. Gate low so real speakers crop and only true B-roll falls back to fill.
+    mode = (fi.frac >= 0.15 && fi.conf >= 5) ? 'crop' : 'fill'
     // but if a meaningful slice of the clip shows an on-screen graphic (chart/text) in the sides a crop
     // would discard, fall back to blur-fit so the whole composition stays visible instead of being sliced.
-    if (mode === 'crop' && (fi.graphic || 0) >= Number(process.env.CLIP_GRAPHIC_FRAC || 0.15)) mode = 'blur'
+    if ((fi.graphic || 0) >= Number(process.env.CLIP_GRAPHIC_FRAC || 0.15)) mode = 'blur'
   }
   let vf, note = mode
   if (mode === 'blur') vf = blurVf(assArg)

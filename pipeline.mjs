@@ -104,8 +104,18 @@ if (process.env.PIPE_PUBLISH && done.length) {
   const logf = join(ROOT, '.published.json')
   const pub = existsSync(logf) ? JSON.parse(readFileSync(logf, 'utf8')) : []
   const already = new Set(pub.map((p) => p.file))
+  // channel-level dedup: never upload a title that already exists on the channel (live audit
+  // snapshot, if present) or in the upload log — catches re-clips of the same moment across runs.
+  const normT = (t) => (t || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
+  const liveTitles = new Set(pub.map((p) => normT(p.title)))
+  try { for (const v of JSON.parse(readFileSync(join(ROOT, '.youtube-audit.json'), 'utf8')).videos) liveTitles.add(normT(v.title)) } catch {}
   const cand = done.flatMap((v) => (v.clips || []).map((c) => ({ ...c, _title: v.title, _url: v.url })))
     .filter((c) => (c.viralScore ?? 0) >= 70 && !already.has(c.file))
+    .filter((c) => {
+      if (!liveTitles.has(normT(c.hook || c._title))) return true
+      console.log(`   ⏭ dup on channel, skipping: ${(c.hook || c._title || '').slice(0, 55)}`)
+      return false
+    })
     .sort((a, b) => (b.viralScore ?? 0) - (a.viralScore ?? 0))
     .slice(0, MAX_CLIPS)
 
@@ -117,6 +127,7 @@ if (process.env.PIPE_PUBLISH && done.length) {
       for (const c of cand) {
         const priv = gatePrivacy(c)
         const title = (c.hook || c._title || 'Short').slice(0, 95)
+        if (liveTitles.has(normT(title))) { console.log(`   ⏭ dup within run, skipping: ${title.slice(0, 55)}`); continue }
         const excerpt = (c.text || '').slice(0, 120).trim()
         const desc = [c.reason, excerpt ? `"${excerpt}…"` : '', `Watch the full video: ${c._url}`].filter(Boolean).join('\n\n')
         try {
@@ -124,6 +135,7 @@ if (process.env.PIPE_PUBLISH && done.length) {
           const icon = priv === 'public' ? '✅' : '📋'
           console.log(`   ${icon} [${priv}] ${r.url}  "${title.slice(0, 44)}"`)
           pub.push({ file: c.file, id: r.id, url: r.url, title, score: c.viralScore ?? null, privacy: priv })
+          liveTitles.add(normT(title))
         } catch (e) { console.log(`   ❌ "${title.slice(0, 40)}" — ${String(e.message).slice(0, 140)}`) }
       }
       writeFileSync(logf, JSON.stringify(pub, null, 2))
