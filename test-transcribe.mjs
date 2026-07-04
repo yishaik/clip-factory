@@ -6,13 +6,14 @@
 //   node test-transcribe.mjs            # all langs
 //   node test-transcribe.mjs he es      # subset
 import { execFile } from 'node:child_process'
-import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { writeFileSync, mkdirSync, rmSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { transcribe } from './clip.mjs'
+import { loadEnv } from './env.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
-try { const e = join(ROOT, '.env'); if (existsSync(e)) for (const l of readFileSync(e, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '') } } catch {}
+loadEnv(join(ROOT, '.env'))
 const KEY = process.env.GEMINI_API_KEY
 const GAPI = 'https://generativelanguage.googleapis.com/v1beta/models'
 const run = (cmd, args) => new Promise((res, rej) => execFile(cmd, args, { maxBuffer: 1 << 26 }, (e, so, se) => e ? rej(new Error(se || e.message)) : res(so)))

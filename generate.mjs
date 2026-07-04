@@ -9,14 +9,10 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { transcribe, emitCaptionLines } from './clip.mjs'
 import { resolveMusic, listLibrary } from './music.mjs'
+import { loadEnv } from './env.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
-try {
-  const envf = join(ROOT, '.env')
-  if (existsSync(envf)) for (const l of readFileSync(envf, 'utf8').split(/\r?\n/)) {
-    const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
-  }
-} catch {}
+loadEnv(join(ROOT, '.env'))
 const KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY
 const OUT = join(ROOT, 'generated')
 const GAPI = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -30,6 +26,41 @@ async function hotTopics() {
   } catch { return [] }
 }
 
+// AI-niche topic sourcing (GEN_NICHE=ai, the default — the channel is all-in on AI/tech).
+// HN front page (tech-native, fresher than Trends for AI) + AI-filtered Trends; evergreen fallback.
+const NICHE = (process.env.GEN_NICHE ?? 'ai').toLowerCase()
+const AI_RE = /\b(AI|A\.I\.|artificial intelligence|AGI|LLM|GPT[-\d]*|ChatGPT|OpenAI|Anthropic|Claude|Gemini|DeepMind|DeepSeek|Grok|Llama|neural|machine learning|robot(s|ics)?|humanoid|superintelligence|Nvidia|chatbot|copilot|agents?|Altman|Amodei|data cent(er|re)s?|compute|semiconductor|chips?)\b/i
+const AI_EVERGREEN = [
+  'why AI agents will replace apps', 'the real cost of training a frontier AI model',
+  'how AI coding assistants actually work', 'the AI data-center energy crisis',
+  'what AGI timelines insiders actually believe', 'the jobs AI will create by 2030',
+  'why AI models hallucinate', 'the AI chip war between the US and China',
+]
+async function hotTopicsAI() {
+  const out = []
+  try {
+    const j = await (await fetch('https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=30')).json()
+    for (const h of j.hits || []) if (h.title && AI_RE.test(h.title)) out.push({ t: h.title, url: h.url || `https://news.ycombinator.com/item?id=${h.objectID}` })
+  } catch {}
+  try { out.push(...(await hotTopics()).filter((t) => AI_RE.test(t)).map((t) => ({ t, url: null }))) } catch {}
+  if (!out.length) out.push(...AI_EVERGREEN.map((t) => ({ t, url: null })))
+  const seen = new Set()
+  return out.filter((x) => !seen.has(x.t) && seen.add(x.t)).slice(0, 18)
+}
+
+// best-effort: which input topic did the model pick? (word overlap) -> its URL for the description
+function pickSource(topics, chosen) {
+  const norm = (x) => (x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 3)
+  const cw = new Set(norm(chosen))
+  let best = null, bs = 0
+  for (const t of topics) {
+    if (!t.url) continue
+    const ws = norm(t.t); const hit = ws.filter((w) => cw.has(w)).length / Math.max(1, ws.length)
+    if (hit > bs) { bs = hit; best = t }
+  }
+  return bs >= 0.4 ? best.url : null
+}
+
 const OAI = 'https://api.openai.com/v1'
 const hasOpenAI = () => !!process.env.OPENAI_API_KEY
 // OpenAI chat fallback for text (script/hook generation) when Gemini is unavailable.
@@ -41,7 +72,7 @@ async function openaiChat(prompt, json) {
   const j = await r.json(); if (j.error) throw new Error('OpenAI: ' + j.error.message)
   return (j.choices?.[0]?.message?.content || '').trim()
 }
-async function gemini(prompt, { json = false, model = process.env.GEN_MODEL || 'gemini-3.1-pro-preview' } = {}) {
+export async function gemini(prompt, { json = false, model = process.env.GEN_MODEL || 'gemini-3.1-pro-preview' } = {}) {
   // 3.1-pro thinks by default and thinking counts toward output budget — bound it + big maxOutputTokens.
   const gc = { temperature: 0.85, maxOutputTokens: 16384, thinkingConfig: { thinkingBudget: Number(process.env.GEN_THINK_BUDGET || 2048) } }
   if (json) gc.responseMimeType = 'application/json'
@@ -72,9 +103,10 @@ async function script(topics) {
   const words = Math.round(secs * 2.4)                                              // ~conversational TTS rate
   const sents = Math.max(4, Math.round(words / 15))                                 // short punchy sentences
   const nScenes = Math.max(4, Math.min(6, Math.round(secs / 6)))
-  const prompt = `You are a top short-form video writer. ${custom ? `Make a ~${secs}s vertical video about: "${custom}".` : topics.length ? `From these LIVE trending topics pick the ONE with the best story for a ~${secs}s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${!custom && avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
+  const prompt = `You are a top short-form video writer. ${custom ? `Make a ~${secs}s vertical video about: "${custom}".` : topics.length ? `From these LIVE trending topics pick the ONE with the best story for a ~${secs}s vertical video (intriguing, broad appeal, a real narrative — avoid bare names / sports scores).\nTrending: ${topics.map((x) => x.t || x).join(', ')}` : 'Pick a fascinating, currently-relevant topic.'}${NICHE === 'ai' && !custom ? '\nThe video MUST be about AI / advanced tech (the channel is an AI-niche channel).' : ''}${!custom && avoid.length ? `\nDo NOT pick any of these recently-used topics (choose something different): ${avoid.join(', ')}` : ''}
 Write "topic", "hook" and "script" in ${lang}. Keep "style" and the "scenes" image prompts in ENGLISH (for the image model).
 LENGTH IS CRITICAL: the script must be ~${words} words (HARD ceiling ${words + 12}) — it will be read aloud and must land near ${secs}s. Be ruthless: a killer first line, then ${sents}-${sents + 1} SHORT punchy sentences, cut every filler word, no throat-clearing, end on a thought-provoking line. Tight beats > completeness.
+TONE: factual and specific, like a sharp human news writer — NO hype clichés (game-changer, mind-blowing, insane, revolutionary, "you won't believe", "breaks the internet"), no exclamation marks, no emoji. The hook must be sentence case — NEVER all-caps.
 Return ONLY JSON:
 {"topic":"...","hook":"<4-7 word punchy on-screen title, in ${lang}>","script":"<narration in ${lang}, ~${words} words, conversational, fast-paced. No emojis/hashtags/stage-directions>","style":"<ONE art-direction line applied to EVERY scene for a cohesive look: a specific palette + lighting + film/lens look, e.g. 'moody teal-and-amber, low-key dramatic lighting, shallow depth of field, 35mm film grain, cinematic'>","music":"<short instrumental background-music brief matching the mood: genre + instruments + tempo, e.g. 'soft cinematic ambient, warm piano and strings, slow, hopeful' — no vocals>","scenes":["<English image prompt 1>","...${nScenes} photo prompts that follow the script beat by beat. Each: a vivid, specific subject AND an explicit shot type — VARY them across scenes (wide establishing, medium, tight close-up, detail/insert, low-angle) for visual rhythm. Describe ONLY subject+composition (the shared 'style' supplies palette/lighting). CRITICAL: every scene must be visually COMPATIBLE with the chosen style — same mood, time-of-day and palette feasibility; do NOT pick subjects that fight it (e.g. if the style is dark/low-key, avoid bright daylight or snow-white scenes — choose subjects that can plausibly carry that palette). photorealistic, vertical 9:16, no text, no logos."]}`
   const out = JSON.parse((await gemini(prompt, { json: true })).match(/\{[\s\S]*\}/)[0])
@@ -98,7 +130,7 @@ async function openaiTTS(text, wav, work) {
   const tmp = join(work, 'oai_tts.wav'); writeFileSync(tmp, Buffer.from(await r.arrayBuffer()))
   await run('ffmpeg', ['-y', '-i', tmp, '-ar', '24000', '-ac', '1', wav]) // normalise to 24k mono like the Gemini path
 }
-async function tts(text, wav, work) {
+export async function tts(text, wav, work) {
   try {
     const r = await fetch(`${GAPI}/gemini-2.5-flash-preview-tts:generateContent?key=${KEY}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -190,7 +222,7 @@ ${ev}`
 async function main() {
   if (!KEY) throw new Error('GEMINI_API_KEY missing')
   mkdirSync(OUT, { recursive: true }); const work = join(OUT, '_work'); mkdirSync(work, { recursive: true })
-  console.error('hot topics...'); const topics = await hotTopics(); console.error('trending: ' + topics.slice(0, 8).join(' · '))
+  console.error('hot topics...'); const topics = NICHE === 'ai' ? await hotTopicsAI() : await hotTopics(); console.error('trending: ' + topics.slice(0, 8).join(' · '))
   console.error('script (Gemini 3.1 Pro)...'); const s = await script(topics); rememberTopic(s.topic)
   const rawWords = s.script.split(/\s+/).filter(Boolean).length
   s.script = fitWords(s.script, s._maxWords)                 // enforce the length ceiling
@@ -279,8 +311,9 @@ async function main() {
     '-map', '[v]', '-map', aMap, '-t', String(dur), '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', '-preset', 'veryfast', out], { cwd: work })
   if (music) console.error(`  music: ${music.replace(ROOT, '.')}`)
   writeFileSync(join(OUT, slug + '.json'), JSON.stringify({ ...s, dur, file: out }, null, 2))
-  console.error(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${imgs.length} visuals · ${dur.toFixed(0)}s`)
-  console.log(JSON.stringify({ outDir: OUT, topic: s.topic, script: s.script, clips: [{ file: out, hook: s.hook, dur: +dur.toFixed(0) }] }))
+  const source = (process.env.GEN_TOPIC || '').trim() ? null : pickSource(topics, s.topic)
+  console.error(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${imgs.length} visuals · ${dur.toFixed(0)}s${source ? '\n   source: ' + source : ''}`)
+  console.log(JSON.stringify({ outDir: OUT, topic: s.topic, script: s.script, source, clips: [{ file: out, hook: s.hook, dur: +dur.toFixed(0) }] }))
 }
 const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/generate.mjs')
 if (isMain) main().catch((e) => { console.error('ERR ' + e.message); process.exit(1) })

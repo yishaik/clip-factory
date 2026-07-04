@@ -23,6 +23,11 @@ cf-config.yml
 client_secret*.json
 .youtube-publish.json
 .published.json
+.youtube-audit.json
+.virality-baseline.json
+.breaking-state.json
+.news-used.json
+.last-run.txt
 _frames/
 music/*.mp3
 music/*.m4a

@@ -4,16 +4,16 @@
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { createReadStream, statSync, existsSync, readFileSync, readdirSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
+import { createReadStream, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { discover } from './source.mjs'
 import { listLibrary } from './music.mjs'
+import { recordFeedback } from './feedback.mjs'
+import { loadEnv } from './env.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
-try { // .env loader (GEMINI_API_KEY etc.)
-  const e = join(ROOT, '.env'); if (existsSync(e)) for (const l of readFileSync(e, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '') }
-} catch {}
+loadEnv(join(ROOT, '.env'))
 const PORT = Number(process.env.PORT || 8013)
 const norm = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
 const underRoot = (p) => norm(p).startsWith(norm(ROOT)) && /\.mp4$/i.test(p) // a video file inside the project
@@ -101,8 +101,7 @@ const server = createServer(async (req, res) => {
       // record your taste verdict on a produced clip, for kappa calibration (kappa-feedback.mjs)
       const { run = '', id = '', human = '' } = await body(req)
       if (!run || !id || !['good', 'bad'].includes(human)) return json(res, 400, { error: 'need run, id, human=good|bad' })
-      const d = join(ROOT, 'feedback'); mkdirSync(d, { recursive: true })
-      appendFileSync(join(d, 'feedback.jsonl'), JSON.stringify({ ts: new Date().toISOString(), run, id, human }) + '\n')
+      recordFeedback(run, id, human)
       return json(res, 200, { ok: true })
     }
     if (req.method === 'GET' && p === '/api/job') {

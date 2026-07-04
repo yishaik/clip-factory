@@ -9,16 +9,10 @@ import { execFile } from 'node:child_process'
 import { writeFileSync, readFileSync, existsSync, mkdirSync, rmSync, readdirSync, statSync, appendFileSync } from 'node:fs'
 import { join, dirname, basename, extname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadEnv } from './env.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
-// minimal .env loader so GEMINI_API_KEY (cloud fallback) is available even in scheduled/headless runs
-try {
-  const envf = join(ROOT, '.env')
-  if (existsSync(envf)) for (const line of readFileSync(envf, 'utf8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/)
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '')
-  }
-} catch {}
+loadEnv(join(ROOT, '.env')) // GEMINI_API_KEY etc. available even in scheduled/headless runs
 const HOST = process.env.OLLAMA_HOST || 'http://localhost:11434'
 const MODEL = process.env.CLIP_MODEL || 'gemma4:e4b'
 const WMODEL = process.env.WHISPER_MODEL || 'base'

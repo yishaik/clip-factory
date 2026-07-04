@@ -14,28 +14,36 @@ const FB = join(ROOT, 'feedback')
 const readJsonl = (f) =>
   existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return null } }).filter(Boolean) : []
 
-const [cmd, ...rest] = process.argv.slice(2)
+// shared by the CLI below and studio.mjs's /api/feedback — one writer for feedback/feedback.jsonl
+export function recordFeedback(run, id, human) {
+  mkdirSync(FB, { recursive: true })
+  appendFileSync(join(FB, 'feedback.jsonl'), JSON.stringify({ ts: new Date().toISOString(), run, id, human }) + '\n')
+}
 
-if (cmd === 'list') {
-  const run = rest[0]
-  const dec = readJsonl(join(FB, 'decisions.jsonl')).filter((d) => !run || d.run === run)
-  const fb = new Map(readJsonl(join(FB, 'feedback.jsonl')).map((f) => [`${f.run}::${f.id}`, f.human]))
-  if (!dec.length) { console.log('no decisions logged yet — run the clip engine first.'); process.exit(0) }
-  let curRun = null
-  for (const d of dec) {
-    if (d.run !== curRun) { curRun = d.run; console.log(`\n${curRun}`) }
-    const v = fb.get(`${d.run}::${d.id}`)
-    const mark = v === 'good' ? '👍' : v === 'bad' ? '👎' : '· '
-    console.log(`  ${mark} ${d.id.padEnd(10)} ${d.picked ? 'PICKED' : '(rejected)'}  score=${d.score}  ${d.hook || ''}`)
+const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/feedback.mjs')
+if (isMain) {
+  const [cmd, ...rest] = process.argv.slice(2)
+
+  if (cmd === 'list') {
+    const run = rest[0]
+    const dec = readJsonl(join(FB, 'decisions.jsonl')).filter((d) => !run || d.run === run)
+    const fb = new Map(readJsonl(join(FB, 'feedback.jsonl')).map((f) => [`${f.run}::${f.id}`, f.human]))
+    if (!dec.length) { console.log('no decisions logged yet — run the clip engine first.'); process.exit(0) }
+    let curRun = null
+    for (const d of dec) {
+      if (d.run !== curRun) { curRun = d.run; console.log(`\n${curRun}`) }
+      const v = fb.get(`${d.run}::${d.id}`)
+      const mark = v === 'good' ? '👍' : v === 'bad' ? '👎' : '· '
+      console.log(`  ${mark} ${d.id.padEnd(10)} ${d.picked ? 'PICKED' : '(rejected)'}  score=${d.score}  ${d.hook || ''}`)
+    }
+    process.exit(0)
   }
-  process.exit(0)
-}
 
-if (rest.length < 1 || !['good', 'bad'].includes((rest[1] || '').toLowerCase())) {
-  console.error('usage: node feedback.mjs <run> <clip-id> <good|bad>   |   node feedback.mjs list [run]')
-  process.exit(2)
+  if (rest.length < 1 || !['good', 'bad'].includes((rest[1] || '').toLowerCase())) {
+    console.error('usage: node feedback.mjs <run> <clip-id> <good|bad>   |   node feedback.mjs list [run]')
+    process.exit(2)
+  }
+  const [run, id, human] = [cmd, rest[0], rest[1].toLowerCase()]
+  recordFeedback(run, id, human)
+  console.log(`recorded: ${run}/${id} = ${human === 'good' ? '👍 good' : '👎 bad'}`)
 }
-const [run, id, human] = [cmd, rest[0], rest[1].toLowerCase()]
-mkdirSync(FB, { recursive: true })
-appendFileSync(join(FB, 'feedback.jsonl'), JSON.stringify({ ts: new Date().toISOString(), run, id, human }) + '\n')
-console.log(`recorded: ${run}/${id} = ${human === 'good' ? '👍 good' : '👎 bad'}`)

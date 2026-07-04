@@ -2,29 +2,16 @@
 // youtube-audit.mjs — read-only inventory of the authorized channel's uploads.
 // Lists every video with privacyStatus, views, likes, comments, publish date, duration.
 // Flags likely duplicates (normalized-title match). No writes. Auth: .youtube-publish.json refresh token.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { accessToken, ytGet } from './youtube-api.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
-async function token() {
-  const c = JSON.parse(readFileSync(join(ROOT, '.youtube-publish.json'), 'utf8'))
-  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: c.client_id, client_secret: c.client_secret, refresh_token: c.refresh_token, grant_type: 'refresh_token' }) })
-  const j = await r.json()
-  if (!j.access_token) throw new Error('token refresh failed: ' + JSON.stringify(j))
-  return j.access_token
-}
-const api = async (tok, path) => {
-  const r = await fetch('https://www.googleapis.com/youtube/v3/' + path, { headers: { authorization: `Bearer ${tok}` } })
-  const j = await r.json()
-  if (!r.ok) throw new Error(path.slice(0, 40) + ' -> ' + r.status + ': ' + JSON.stringify(j).slice(0, 200))
-  return j
-}
 const norm = (t) => (t || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim()
 
-const tok = await token()
-const ch = await api(tok, 'channels?part=contentDetails,snippet,statistics&mine=true')
+const tok = await accessToken()
+const ch = await ytGet(tok, 'channels?part=contentDetails,snippet,statistics&mine=true')
 const c0 = ch.items?.[0]
 if (!c0) { console.error('no channel for this auth'); process.exit(1) }
 const uploads = c0.contentDetails.relatedPlaylists.uploads
@@ -32,7 +19,7 @@ console.error(`channel: ${c0.snippet.title}  ·  ${Number(c0.statistics.subscrib
 
 let ids = [], pageToken = ''
 do {
-  const pl = await api(tok, `playlistItems?part=contentDetails&maxResults=50&playlistId=${uploads}` + (pageToken ? `&pageToken=${pageToken}` : ''))
+  const pl = await ytGet(tok, `playlistItems?part=contentDetails&maxResults=50&playlistId=${uploads}` + (pageToken ? `&pageToken=${pageToken}` : ''))
   ids.push(...pl.items.map((i) => i.contentDetails.videoId))
   pageToken = pl.nextPageToken || ''
 } while (pageToken)
@@ -40,7 +27,7 @@ do {
 const vids = []
 for (let i = 0; i < ids.length; i += 50) {
   const batch = ids.slice(i, i + 50).join(',')
-  const v = await api(tok, `videos?part=snippet,status,statistics,contentDetails&id=${batch}`)
+  const v = await ytGet(tok, `videos?part=snippet,status,statistics,contentDetails&id=${batch}`)
   for (const it of v.items) vids.push({
     id: it.id, title: it.snippet.title, privacy: it.status.privacyStatus,
     published: it.snippet.publishedAt, dur: it.contentDetails.duration,

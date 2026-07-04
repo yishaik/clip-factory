@@ -44,9 +44,14 @@ export async function channelFeed(channelId) {
 
 // clip-worthiness of a video by its TITLE (hook words, numbers, questions, how-to)
 const TITLE_HOOK = /\b(how to|why|the truth|secret|mistake|stop|never|always|nobody|biggest|best|worst|reason|lesson|story of|inside|guide|framework|million|\$\d|\d+x|\d+ ways|first \d)\b/i
+// channel niche: AI/tech only (the two breakout shorts were both AI — the channel is all-in on it).
+// SOURCE_NICHE=0 disables the strict filter; matching titles always get a score boost.
+export const NICHE_RE = /\b(AI|A\.I\.|artificial intelligence|AGI|LLM|GPT[-\d]*|ChatGPT|OpenAI|Anthropic|Claude|Opus ?\d|Sonnet ?\d|Gemini|DeepMind|DeepSeek|Grok|Llama|Mistral|neural|machine learning|robot(s|ics)?|humanoid|superintelligence|Nvidia|chatbot|copilot|agents?|Altman|Amodei|Hassabis|Karpathy|LeCun|data cent(er|re)s?|servers?|compute|semiconductor|chips?)\b/i
+const NICHE_STRICT = process.env.SOURCE_NICHE !== '0'
 function scoreTitle(t) {
   let s = 0
   if (TITLE_HOOK.test(t)) s += 4
+  if (NICHE_RE.test(t)) s += 5
   if (/\d/.test(t)) s += 2
   if (/\?$/.test(t)) s += 1
   if (t.split(' ').length >= 5) s += 1
@@ -178,7 +183,12 @@ export async function discover(sources, { days = DAYS, skipSeen = false, queries
   // a video can surface from several providers -> keep the highest-scoring copy
   const byId = new Map()
   for (const v of found) { const e = byId.get(v.id); if (!e || v.score > e.score) byId.set(v.id, v) }
-  const merged = [...byId.values()].sort((a, b) => b.score - a.score || (new Date(b.published || 0) - new Date(a.published || 0)))
+  let merged = [...byId.values()].sort((a, b) => b.score - a.score || (new Date(b.published || 0) - new Date(a.published || 0)))
+  if (NICHE_STRICT) {
+    const dropped = merged.filter((v) => !NICHE_RE.test(v.title))
+    if (dropped.length) console.error(`  niche filter: dropped ${dropped.length} off-niche (SOURCE_NICHE=0 to disable)`)
+    merged = merged.filter((v) => NICHE_RE.test(v.title))
+  }
   return diversify(merged, Number(process.env.SOURCE_PER_CHANNEL || 2))
 }
 

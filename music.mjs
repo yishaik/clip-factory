@@ -6,6 +6,7 @@
 import { readdirSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadEnv } from './env.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 const MUSIC_DIR = join(ROOT, 'music')
@@ -60,7 +61,7 @@ export async function resolveMusic({ mode = 'none', aiPrompt = '', seconds = 20,
 // CLI: node music.mjs "prompt" [seconds]  -> generate a track to music/_ai_track.mp3
 const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/music.mjs')
 if (isMain) {
-  try { const env = join(ROOT, '.env'); if (existsSync(env)) for (const l of (await import('node:fs')).readFileSync(env, 'utf8').split(/\r?\n/)) { const m = l.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/); if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '') } } catch {}
+  loadEnv(join(ROOT, '.env'))
   const prompt = process.argv[2] || 'soft cinematic ambient, warm piano and strings, slow, hopeful'
   const secs = Number(process.argv[3] || 15)
   console.error(`generating music: "${prompt}" (${secs}s)...`)
