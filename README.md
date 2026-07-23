@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> **FROZEN (2026-07-05).** This repo was absorbed into the ai-pulse monorepo (D:/Projects/ai-pulse) at Phase 4 cutover.
+> All automation, state, and future work live there. This copy is a read-only archive.
+
 # Clip Factory
 
 **Live:** https://clip-factory-sooty.vercel.app
@@ -17,6 +21,20 @@ node clip.mjs <video.mp4> [n]      # -> clips/<name>/clip-1.mp4 ...
 Tunables (env): `WHISPER_MODEL` (tiny/base/small), `CLIP_TARGET` (sec/clip), `CLIP_GAP`, `CLIP_AI=1` (Gemma writes a hook caption per clip, CPU by default).
 
 Needs `ffmpeg`, `ffprobe`, `whisper` on PATH. Zero npm deps.
+
+### Kling scene-video mode
+
+`generate.mjs` defaults to generated stills with Ken-Burns motion. To render each planned scene as a Kling video instead, set:
+
+```powershell
+$env:GEN_VISUALS = 'kling'
+$env:KLING_MCP_ACCESS_TOKEN = '...'
+node generate.mjs
+```
+
+The pipeline calls Kling's remote MCP endpoint, polls each generation, normalizes the result to 9:16, and falls back to its existing image renderer if a scene cannot be generated. Optional knobs: `KLING_MCP_URL` (defaults to `https://kling.ai/mcp`), `KLING_VIDEO_MODEL`, `KLING_ASPECT_RATIO` (defaults to `9:16`), `GEN_KLING_DURATION` (defaults to `5`), `KLING_POLL_MS`, and `KLING_TIMEOUT_MS`.
+
+Codex's MCP OAuth credential is intentionally not readable by arbitrary Node programs; use a dedicated short-lived access token for unattended pipeline runs and keep it only in the local `.env` file (which is ignored by Git).
 
 ## The product
 

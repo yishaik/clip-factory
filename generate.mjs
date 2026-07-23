@@ -9,6 +9,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { transcribe, emitCaptionLines } from './clip.mjs'
 import { resolveMusic, listLibrary } from './music.mjs'
+import { generateKlingScene } from './kling.mjs'
 import { loadEnv } from './env.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
@@ -241,14 +242,26 @@ async function main() {
   const capWords = alignToTiming(s.script.trim().split(/\s+/).filter(Boolean), words)
   const assPath = join(work, 'gen.ass'); writeFileSync(assPath, genAss(capWords, dur, s.hook, rtl))
 
-  console.error(`generating visuals (Imagen)...  style: ${s.style || '(default)'}`)
+  const visualMode = (process.env.GEN_VISUALS || 'images').toLowerCase()
+  if (!['images', 'kling'].includes(visualMode)) throw new Error('GEN_VISUALS must be "images" or "kling"')
+  console.error(`generating visuals (${visualMode === 'kling' ? 'Kling scene video' : 'Imagen'})...  style: ${s.style || '(default)'}`)
   const scenes = (s.scenes && s.scenes.length ? s.scenes : [s.topic]).slice(0, 6)
-  const imgs = []
-  for (let i = 0; i < scenes.length; i++) { const png = join(work, `img${i}.png`); if (await image(scenes[i], png, s.style)) { imgs.push(png); console.error(`  img ${i + 1}/${scenes.length} ok`) } }
-  if (!imgs.length) throw new Error('no images generated')
+  const visuals = []
+  for (let i = 0; i < scenes.length; i++) {
+    if (visualMode === 'kling') {
+      const mp4 = join(work, `kling${i}.mp4`)
+      try {
+        await generateKlingScene({ prompt: `${s.style || 'cinematic, photorealistic'}. ${scenes[i]}. Vertical 9:16, no text, no watermark`, outPath: mp4 })
+        visuals.push({ type: 'video', path: mp4 }); console.error(`  Kling video ${i + 1}/${scenes.length} ok`); continue
+      } catch (e) { console.error(`  Kling video ${i + 1}/${scenes.length} skipped: ${String(e.message).slice(0, 140)}; falling back to image`) }
+    }
+    const png = join(work, `img${i}.png`)
+    if (await image(scenes[i], png, s.style)) { visuals.push({ type: 'image', path: png }); console.error(`  img ${i + 1}/${scenes.length} ok`) }
+  }
+  if (!visuals.length) throw new Error('no visuals generated')
 
   console.error('Ken-Burns slideshow (varied motion + crossfades)...')
-  const FPS = 30, N = imgs.length
+  const FPS = 30, N = visuals.length
   const XF = Math.min(Number(process.env.GEN_XFADE || 0.6), 1.2) // crossfade seconds between scenes
   // each segment is longer by the overlap so the crossfaded total still equals the voiceover length
   const segDur = (dur + (N - 1) * XF) / N
@@ -264,10 +277,17 @@ async function main() {
   const segs = []
   for (let i = 0; i < N; i++) {
     const seg = join(work, `seg${i}.mp4`); segs.push(seg)
-    const kb = `${moves[i % moves.length]}:d=1:s=1080x1920:fps=${FPS}`
-    await run('ffmpeg', ['-y', '-loop', '1', '-framerate', String(FPS), '-t', segDur.toFixed(2), '-i', imgs[i],
-      '-vf', `scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,${kb},format=yuv420p`,
-      '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', seg])
+    const visual = visuals[i]
+    if (visual.type === 'video') {
+      await run('ffmpeg', ['-y', '-stream_loop', '-1', '-i', visual.path, '-t', segDur.toFixed(2),
+        '-vf', `fps=${FPS},scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p`,
+        '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', seg])
+    } else {
+      const kb = `${moves[i % moves.length]}:d=1:s=1080x1920:fps=${FPS}`
+      await run('ffmpeg', ['-y', '-loop', '1', '-framerate', String(FPS), '-t', segDur.toFixed(2), '-i', visual.path,
+        '-vf', `scale=1350:2400:force_original_aspect_ratio=increase,crop=1350:2400,${kb},format=yuv420p`,
+        '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', seg])
+    }
   }
 
   // optional background music (ducked under the voice). GEN_MUSIC=explicit path wins; else GEN_MUSIC_MODE:
@@ -312,7 +332,7 @@ async function main() {
   if (music) console.error(`  music: ${music.replace(ROOT, '.')}`)
   writeFileSync(join(OUT, slug + '.json'), JSON.stringify({ ...s, dur, file: out }, null, 2))
   const source = (process.env.GEN_TOPIC || '').trim() ? null : pickSource(topics, s.topic)
-  console.error(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${imgs.length} visuals · ${dur.toFixed(0)}s${source ? '\n   source: ' + source : ''}`)
+  console.error(`\n✅ ${out}\n   topic: ${s.topic}\n   hook: ${s.hook}\n   ${visuals.length} visuals (${visualMode}) · ${dur.toFixed(0)}s${source ? '\n   source: ' + source : ''}`)
   console.log(JSON.stringify({ outDir: OUT, topic: s.topic, script: s.script, source, clips: [{ file: out, hook: s.hook, dur: +dur.toFixed(0) }] }))
 }
 const isMain = process.argv[1] && process.argv[1].replace(/\\/g, '/').endsWith('/generate.mjs')
