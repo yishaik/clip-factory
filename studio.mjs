@@ -4,19 +4,18 @@
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
-import { createReadStream, statSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { discover } from './source.mjs'
 import { listLibrary } from './music.mjs'
 import { recordFeedback } from './feedback.mjs'
 import { loadEnv } from './env.mjs'
+import { allowedFile, serveVideo } from './studio-files.mjs'
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 loadEnv(join(ROOT, '.env'))
 const PORT = Number(process.env.PORT || 8013)
-const norm = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
-const underRoot = (p) => norm(p).startsWith(norm(ROOT)) && /\.mp4$/i.test(p) // a video file inside the project
 const TOKEN = process.env.STUDIO_TOKEN || (existsSync(join(ROOT, '.studio-token')) ? readFileSync(join(ROOT, '.studio-token'), 'utf8').trim() : '') // ?t=TOKEN gate for public tunnels
 const jobs = new Map()
 let seq = 0
@@ -36,19 +35,6 @@ function startJob(type, args, env) {
     else { job.status = 'error'; job.log.push('exited ' + code) }
   })
   return id
-}
-
-function serveVideo(req, res, path) {
-  if (!existsSync(path)) return json(res, 404, { error: 'not found' })
-  const size = statSync(path).size, range = req.headers.range
-  if (range) {
-    const m = range.replace(/bytes=/, '').split('-'); const start = parseInt(m[0]) || 0; const end = m[1] ? parseInt(m[1]) : size - 1
-    res.writeHead(206, { 'content-range': `bytes ${start}-${end}/${size}`, 'accept-ranges': 'bytes', 'content-length': end - start + 1, 'content-type': 'video/mp4' })
-    createReadStream(path, { start, end }).pipe(res)
-  } else {
-    res.writeHead(200, { 'content-length': size, 'content-type': 'video/mp4', 'accept-ranges': 'bytes' })
-    createReadStream(path).pipe(res)
-  }
 }
 
 const body = (req) => new Promise((r) => { let b = ''; req.on('data', (c) => b += c); req.on('end', () => { try { r(JSON.parse(b || '{}')) } catch { r({}) } }) })
@@ -80,7 +66,8 @@ const server = createServer(async (req, res) => {
       if (music && music !== 'none') env.GEN_MUSIC_MODE = music
       if (musvol) env.GEN_MUSIC_VOL = String(musvol)
       if (musprompt) env.GEN_MUSIC_PROMPT = musprompt
-      if (mustrack && norm(mustrack).startsWith(norm(join(ROOT, 'music'))) && /\.(mp3|m4a|wav|ogg|aac)$/i.test(mustrack)) env.GEN_MUSIC = mustrack // explicit library track
+      const track = allowedFile(join(ROOT, 'music'), mustrack, /\.(mp3|m4a|wav|ogg|aac)$/i)
+      if (track) env.GEN_MUSIC = track // explicit library track
       return json(res, 200, { id: startJob('generate', ['generate.mjs'], env) })
     }
     if (req.method === 'GET' && p === '/api/music') {
@@ -94,8 +81,9 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === 'POST' && p === '/api/publish') {
       const { file = '', title = 'Short', privacy = 'unlisted' } = await body(req)
-      if (!underRoot(file)) return json(res, 400, { error: 'bad file' })
-      return json(res, 200, { id: startJob('publish', ['publish.mjs', file, title.slice(0, 95) || 'Short', 'Auto-clipped by Clip Factory.', privacy], {}) })
+      const video = allowedFile(ROOT, file, /\.mp4$/i)
+      if (!video) return json(res, 400, { error: 'bad file' })
+      return json(res, 200, { id: startJob('publish', ['publish.mjs', video, title.slice(0, 95) || 'Short', 'Auto-clipped by Clip Factory.', privacy], {}) })
     }
     if (req.method === 'POST' && p === '/api/feedback') {
       // record your taste verdict on a produced clip, for kappa calibration (kappa-feedback.mjs)
@@ -109,8 +97,8 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { status: job.status, log: job.log.slice(-40), result: job.result })
     }
     if (req.method === 'GET' && p === '/file') {
-      const path = u.searchParams.get('p') || ''
-      if (!underRoot(path)) return json(res, 403, { error: 'forbidden' })
+      const path = allowedFile(ROOT, u.searchParams.get('p'), /\.mp4$/i)
+      if (!path) return json(res, 403, { error: 'forbidden' })
       return serveVideo(req, res, path)
     }
     json(res, 404, { error: 'not found' })
